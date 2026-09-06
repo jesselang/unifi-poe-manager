@@ -52,19 +52,26 @@ async def set_poe(turn_on: bool, cfg: dict) -> None:
         await ctrl.login()
         await ctrl.devices.update()
 
+        # Group by device: DeviceSetPoePortModeRequest.create() overwrites a
+        # device's whole port_overrides list from a single snapshot, so all
+        # ports on the same device must be set together in one request or
+        # later requests silently undo earlier ones.
+        targets_by_mac: dict[str, list[tuple[int, str]]] = {}
         for port_cfg in cfg["ports"]:
             mac = port_cfg["device_mac"]
             idx = port_cfg["port_idx"]
             mode = port_cfg.get("on_mode", "auto") if turn_on else "off"
+            targets_by_mac.setdefault(mac, []).append((idx, mode))
+
+        for mac, targets in targets_by_mac.items():
             device = ctrl.devices.get(mac)
             if device is None:
                 log.error(f"Device {mac} not found")
                 continue
-            request = DeviceSetPoePortModeRequest.create(
-                device, port_idx=idx, mode=mode
-            )
+            request = DeviceSetPoePortModeRequest.create(device, targets=targets)
             await ctrl.request(request)
-            log.info(f"Set port {idx} on {mac} to poe={mode}")
+            for idx, mode in targets:
+                log.info(f"Set port {idx} on {mac} to poe={mode}")
 
 
 def job_poe_off():
