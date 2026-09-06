@@ -21,11 +21,14 @@ from aiounifi.models.device import DeviceSetPoePortModeRequest
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 # Loads .env into the environment if present, without overriding variables
-# already set (e.g. by systemd's EnvironmentFile= in production).
-load_dotenv()
+# already set (e.g. by systemd's EnvironmentFile= in production). usecwd=True
+# so it searches from the working directory the command is run from, not
+# from minimal.py's own location — the packaged binary's copy lives in the
+# Nix store, which would otherwise never find a repo-local .env.
+load_dotenv(find_dotenv(usecwd=True))
 
 logging.basicConfig(
     level=logging.INFO,
