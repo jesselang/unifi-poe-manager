@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 AP Schedule Controller — MVP
-Turns PoE off at 23:59 CT, on at 06:00 CT.
-No web UI. Run with: nix develop --command python3 minimal.py
+Turns PoE off/on per port on a schedule (each port may override the global
+off/on times). No web UI. Run with: nix develop --command python3 minimal.py
 """
 
 import asyncio
@@ -10,6 +10,7 @@ import logging
 import os
 import tempfile
 import tomllib
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -37,8 +38,55 @@ def load_config() -> dict:
         return tomllib.load(f)
 
 
-async def set_poe(turn_on: bool, cfg: dict) -> None:
-    """Turn configured ports off, or on to each port's configured on_mode."""
+def port_schedule(port_cfg: dict, global_schedule: dict) -> tuple[int, int, int, int]:
+    """A port's (off_hour, off_minute, on_hour, on_minute), falling back to
+    the global schedule for any field the port doesn't override."""
+    return (
+        port_cfg.get("off_hour", global_schedule["off_hour"]),
+        port_cfg.get("off_minute", global_schedule["off_minute"]),
+        port_cfg.get("on_hour", global_schedule["on_hour"]),
+        port_cfg.get("on_minute", global_schedule["on_minute"]),
+    )
+
+
+def desired_mode(now: datetime, port_cfg: dict, global_schedule: dict) -> str:
+    """What this port's PoE mode should be right now, per its own (or the
+    global) off/on times. Handles a window that crosses midnight."""
+    off_hour, off_minute, on_hour, on_minute = port_schedule(port_cfg, global_schedule)
+    off_min = off_hour * 60 + off_minute
+    on_min = on_hour * 60 + on_minute
+    now_min = now.hour * 60 + now.minute
+
+    if off_min == on_min:
+        is_off = False
+    elif off_min < on_min:
+        is_off = off_min <= now_min < on_min
+    else:
+        is_off = now_min >= off_min or now_min < on_min
+
+    return "off" if is_off else port_cfg.get("on_mode", "auto")
+
+
+def trigger_times(cfg: dict) -> set[tuple[int, int]]:
+    """Union of every port's (own or fallback) off/on times — one reconcile
+    job is scheduled per distinct time."""
+    times = set()
+    for port_cfg in cfg["ports"]:
+        off_hour, off_minute, on_hour, on_minute = port_schedule(
+            port_cfg, cfg["schedule"]
+        )
+        times.add((off_hour, off_minute))
+        times.add((on_hour, on_minute))
+    return times
+
+
+async def reconcile(cfg: dict) -> None:
+    """Set every configured port to what its own schedule says it should be
+    right now. Always recomputed from config + wall clock (not from what we
+    last set), so it's safe to call at startup, after a restart, or from
+    multiple trigger times without depending on prior state."""
+    now = datetime.now(tz=ZoneInfo(cfg["schedule"]["timezone"]))
+
     async with aiohttp.ClientSession() as session:
         config = Configuration(
             session,
@@ -61,7 +109,7 @@ async def set_poe(turn_on: bool, cfg: dict) -> None:
         for port_cfg in cfg["ports"]:
             mac = port_cfg["device_mac"]
             idx = port_cfg["port_idx"]
-            mode = port_cfg.get("on_mode", "auto") if turn_on else "off"
+            mode = desired_mode(now, port_cfg, cfg["schedule"])
             targets_by_mac.setdefault(mac, []).append((idx, mode))
 
         for mac, targets in targets_by_mac.items():
@@ -75,16 +123,10 @@ async def set_poe(turn_on: bool, cfg: dict) -> None:
                 log.info(f"Set port {idx} on {mac} to poe={mode}")
 
 
-def job_poe_off():
+def job_reconcile():
     cfg = load_config()
-    log.info("Scheduled: turning APs off")
-    asyncio.run(set_poe(False, cfg))
-
-
-def job_poe_on():
-    cfg = load_config()
-    log.info("Scheduled: turning APs on")
-    asyncio.run(set_poe(True, cfg))
+    log.info("Scheduled: reconciling PoE state")
+    asyncio.run(reconcile(cfg))
 
 
 def main():
@@ -95,31 +137,19 @@ def main():
     jobstores = {"default": SQLAlchemyJobStore(url=f"sqlite:///{db_path}")}
     scheduler = BlockingScheduler(jobstores=jobstores, timezone=tz)
 
-    scheduler.add_job(
-        job_poe_off,
-        CronTrigger(
-            hour=cfg["schedule"]["off_hour"],
-            minute=cfg["schedule"]["off_minute"],
-            timezone=tz,
-        ),
-        id="poe_off",
-    )
-
-    scheduler.add_job(
-        job_poe_on,
-        CronTrigger(
-            hour=cfg["schedule"]["on_hour"],
-            minute=cfg["schedule"]["on_minute"],
-            timezone=tz,
-        ),
-        id="poe_on",
-    )
+    times = sorted(trigger_times(cfg))
+    for hour, minute in times:
+        scheduler.add_job(
+            job_reconcile,
+            CronTrigger(hour=hour, minute=minute, timezone=tz),
+            id=f"reconcile_{hour:02d}{minute:02d}",
+        )
 
     log.info(
-        f"Scheduler started. "
-        f"off={cfg['schedule']['off_hour']}:{cfg['schedule']['off_minute']:02d} CT  "
-        f"on={cfg['schedule']['on_hour']}:{cfg['schedule']['on_minute']:02d} CT"
+        f"Scheduler started. Reconcile times ({cfg['schedule']['timezone']}): "
+        + ", ".join(f"{h:02d}:{m:02d}" for h, m in times)
     )
+    job_reconcile()  # sync state immediately in case of a mid-window restart
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):

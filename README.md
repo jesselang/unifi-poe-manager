@@ -11,9 +11,10 @@ FastAPI snooze UI, not yet built).
 - `discover.py` — run once, interactively, to find your switch's device MAC
   and confirm port numbers/names. Prompts for controller host/port/site and
   credentials; nothing is hardcoded or written to disk.
-- `minimal.py` — the scheduler. Reads `config.toml`, schedules two cron jobs
-  (off / on) via APScheduler, and on each firing logs into the UniFi
-  controller and sets the configured ports' PoE mode via `aiounifi`.
+- `minimal.py` — the scheduler. Reads `config.toml`, schedules a reconcile
+  job (via APScheduler) for every distinct off/on time across all ports, and
+  on each firing recomputes every port's desired PoE mode from wall-clock
+  time and pushes it via `aiounifi`.
 - `config.toml` — your real config (controller credentials, switch MAC, port
   list, schedule). Copy `config.example.toml` to create it. **Gitignored** —
   it holds a plaintext password and never gets committed.
@@ -55,6 +56,18 @@ FastAPI snooze UI, not yet built).
    ports can use different modes (e.g. APs on `auto`, a passive-PoE device on
    `pasv24`).
 
+   A port can also override the global `[schedule]` times with its own
+   `off_hour`/`off_minute`/`on_hour`/`on_minute` — any field it doesn't set
+   falls back to the global value:
+   ```toml
+   [[ports]]
+   device_mac = "aa:bb:cc:dd:ee:ff"
+   port_idx   = 9
+   on_mode    = "pasv24"
+   off_hour   = 22      # this port goes off an hour earlier than the rest
+   off_minute = 0
+   ```
+
 ## Running
 
 In the dev shell:
@@ -69,10 +82,23 @@ Or point at a config file elsewhere via `AP_CONTROLLER_CONFIG`:
 AP_CONTROLLER_CONFIG=/path/to/config.toml python3 minimal.py
 ```
 
-It logs the next off/on times on startup, then logs each time it fires.
-Ctrl+C shuts it down cleanly. The APScheduler job store lives in a temp
-directory (not persisted — jobs are just recreated from `config.toml` on
-every start).
+It logs the scheduled reconcile times on startup, immediately reconciles
+state once (so a restart mid-window corrects itself), then logs each time it
+fires thereafter. Ctrl+C shuts it down cleanly. The APScheduler job store
+lives in a temp directory (not persisted — jobs are just recreated from
+`config.toml` on every start).
+
+## Testing
+
+The scheduling logic (`desired_mode`, `port_schedule`, `trigger_times` in
+`minimal.py`) is pure and unit-tested in `tests/`:
+
+```
+nix develop --command pytest
+```
+
+There's no automated coverage of the `aiounifi`/controller calls — those are
+exercised by the manual verification steps below, against a real controller.
 
 ## Verifying it works
 

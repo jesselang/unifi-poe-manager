@@ -19,9 +19,10 @@
         pkgs = nixpkgs.legacyPackages.${system};
         python = pkgs.python313;
         pythonEnv = python.withPackages pythonPackages;
+        devPythonEnv = python.withPackages (ps: pythonPackages ps ++ [ ps.pytest ]);
       in {
         devShells.default = pkgs.mkShell {
-          packages = [ pythonEnv pkgs.sqlite ];
+          packages = [ devPythonEnv pkgs.sqlite ];
         };
 
         packages.default = pkgs.stdenv.mkDerivation {

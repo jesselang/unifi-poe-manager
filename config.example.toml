@@ -16,3 +16,9 @@ timezone   = "America/Chicago"
 device_mac = ""
 port_idx   = 1
 on_mode    = "auto"    # auto | pasv24 (passive 24v) | passthrough
+# Optional per-port schedule override — omit any/all of these to fall back
+# to the [schedule] values above.
+# off_hour   = 23
+# off_minute = 59
+# on_hour    = 6
+# on_minute  = 0
