@@ -165,7 +165,7 @@ off_hour   = 23
 off_minute = 59
 on_hour    = 6
 on_minute  = 0
-timezone   = "America/Chicago"
+timezone   = "UTC"
 
 [[ports]]
 device_mac = ""         # fill in from discovery

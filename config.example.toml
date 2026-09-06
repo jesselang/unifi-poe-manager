@@ -1,16 +1,16 @@
 [controller]
 host = "unifi"
 port = 8443
-username = "" # create a local admin
-password = ""
 site = ""
+# Credentials are NOT read from this file — set AP_CONTROLLER_USERNAME and
+# AP_CONTROLLER_PASSWORD as environment variables when running minimal.py.
 
 [schedule]
 off_hour   = 23
 off_minute = 59
 on_hour    = 6
 on_minute  = 0
-timezone   = "America/Chicago"
+timezone   = "UTC"
 
 [[ports]]
 device_mac = ""

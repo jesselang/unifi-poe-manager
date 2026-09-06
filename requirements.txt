@@ -1,4 +1,5 @@
 aiohttp
 aiounifi
 apscheduler
+python-dotenv
 sqlalchemy

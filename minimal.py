@@ -21,6 +21,11 @@ from aiounifi.models.device import DeviceSetPoePortModeRequest
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
+from dotenv import load_dotenv
+
+# Loads .env into the environment if present, without overriding variables
+# already set (e.g. by systemd's EnvironmentFile= in production).
+load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,6 +41,22 @@ CONFIG_PATH = Path(
 def load_config() -> dict:
     with open(CONFIG_PATH, "rb") as f:
         return tomllib.load(f)
+
+
+def load_credentials() -> tuple[str, str]:
+    """Controller username/password, from environment (or .env) only — never
+    from config.toml, so the (possibly Nix-store-generated) config file never
+    needs to hold a secret."""
+    try:
+        return (
+            os.environ["UNIFI_CONTROLLER_USERNAME"],
+            os.environ["UNIFI_CONTROLLER_PASSWORD"],
+        )
+    except KeyError as err:
+        raise SystemExit(
+            f"{err.args[0]} must be set in the environment or .env "
+            "(UNIFI_CONTROLLER_USERNAME and UNIFI_CONTROLLER_PASSWORD are required)"
+        ) from None
 
 
 def port_schedule(port_cfg: dict, global_schedule: dict) -> tuple[int, int, int, int]:
@@ -80,7 +101,7 @@ def trigger_times(cfg: dict) -> set[tuple[int, int]]:
     return times
 
 
-async def reconcile(cfg: dict) -> None:
+async def reconcile(cfg: dict, username: str, password: str) -> None:
     """Set every configured port to what its own schedule says it should be
     right now. Always recomputed from config + wall clock (not from what we
     last set), so it's safe to call at startup, after a restart, or from
@@ -91,8 +112,8 @@ async def reconcile(cfg: dict) -> None:
         config = Configuration(
             session,
             cfg["controller"]["host"],
-            username=cfg["controller"]["username"],
-            password=cfg["controller"]["password"],
+            username=username,
+            password=password,
             port=cfg["controller"]["port"],
             site=cfg["controller"]["site"],
             ssl_context=False,
@@ -125,12 +146,14 @@ async def reconcile(cfg: dict) -> None:
 
 def job_reconcile():
     cfg = load_config()
+    username, password = load_credentials()
     log.info("Scheduled: reconciling PoE state")
-    asyncio.run(reconcile(cfg))
+    asyncio.run(reconcile(cfg, username, password))
 
 
 def main():
     cfg = load_config()
+    load_credentials()  # fail fast if env vars are missing, before scheduling
     tz = ZoneInfo(cfg["schedule"]["timezone"])
 
     db_path = Path(tempfile.mkdtemp(prefix="ap-controller-")) / "ap_controller.db"

@@ -15,11 +15,16 @@ FastAPI snooze UI, not yet built).
   job (via APScheduler) for every distinct off/on time across all ports, and
   on each firing recomputes every port's desired PoE mode from wall-clock
   time and pushes it via `aiounifi`.
-- `config.toml` — your real config (controller credentials, switch MAC, port
-  list, schedule). Copy `config.example.toml` to create it. **Gitignored** —
-  it holds a plaintext password and never gets committed.
+- `config.toml` — non-secret config: controller host/port/site, switch MAC,
+  port list, schedule. Copy `config.example.toml` to create it. Gitignored
+  for convenience, but holds no secret — safe to manage in Nix (see
+  Deploying below).
+- Credentials are **never read from `config.toml`** — `minimal.py` reads
+  `UNIFI_CONTROLLER_USERNAME`/`UNIFI_CONTROLLER_PASSWORD` from the environment
+  only, and exits immediately if they're unset.
 - `flake.nix` — Nix dev shell, a `packages.default` build of the app, and a
-  `nixosModules.default` NixOS module for deploying it as a systemd service.
+  `nixosModules.default` NixOS module for deploying it as a systemd service
+  (which declares the non-secret config directly in Nix — see below).
 
 ## Requirements
 
@@ -44,7 +49,7 @@ FastAPI snooze UI, not yet built).
    ```
    cp config.example.toml config.toml
    ```
-   Fill in `[controller]` (host/port/site/username/password) and one
+   Fill in `[controller]` (host/port/site — no credentials here) and one
    `[[ports]]` entry per port, e.g.:
    ```toml
    [[ports]]
@@ -70,9 +75,21 @@ FastAPI snooze UI, not yet built).
 
 ## Running
 
-In the dev shell:
+`minimal.py` loads a `.env` file automatically (via `python-dotenv`), so for
+local dev just create one:
 
 ```
+cp .env.example .env   # then fill in the two values
+nix develop --command python3 minimal.py
+```
+
+`.env` is gitignored. Exported environment variables still work too (and
+take precedence over `.env`, matching how systemd's `EnvironmentFile=` works
+in production — see Deploying below):
+
+```
+export UNIFI_CONTROLLER_USERNAME=ap-scheduler
+export UNIFI_CONTROLLER_PASSWORD=...
 nix develop --command python3 minimal.py
 ```
 
@@ -81,6 +98,9 @@ Or point at a config file elsewhere via `AP_CONTROLLER_CONFIG`:
 ```
 AP_CONTROLLER_CONFIG=/path/to/config.toml python3 minimal.py
 ```
+
+`UNIFI_CONTROLLER_USERNAME`/`UNIFI_CONTROLLER_PASSWORD` are required — the process
+exits immediately with a clear error if either is missing.
 
 It logs the scheduled reconcile times on startup, immediately reconciles
 state once (so a restart mid-window corrects itself), then logs each time it
@@ -115,29 +135,48 @@ Build the package to sanity-check it first:
 
 ```
 nix build .#default
-result/bin/ap-controller   # reads AP_CONTROLLER_CONFIG or ./config.toml
+UNIFI_CONTROLLER_USERNAME=... UNIFI_CONTROLLER_PASSWORD=... result/bin/ap-controller
 ```
 
 To run it as a systemd service on a NixOS machine, import this flake's
 `nixosModules.default` into that machine's NixOS configuration (e.g. as a
-flake input), then:
+flake input) and declare everything non-secret directly in Nix:
 
 ```nix
 services.ap-controller = {
   enable = true;
-  # configFile defaults to /etc/ap-controller/config.toml
+  environmentFile = "/run/secrets/ap-controller-env";  # see below
+  controller = {
+    host = "unifi";
+    site = "abc123";
+  };
+  schedule = {
+    offHour = 23; offMinute = 59;
+    onHour  = 6;  onMinute  = 0;
+  };
+  ports = [
+    { deviceMac = "aa:bb:cc:dd:ee:ff"; portIdx = 4; onMode = "auto"; }
+    { deviceMac = "aa:bb:cc:dd:ee:ff"; portIdx = 9; onMode = "pasv24";
+      offHour = 22; offMinute = 0; }  # per-port schedule override
+  ];
 };
 ```
 
-The module does **not** manage `config.toml` — since it contains a plaintext
-password, create it by hand on the target machine:
+The module renders these into a `config.toml` in the Nix store and points
+`AP_CONTROLLER_CONFIG` at it — safe, since none of this is secret.
+
+`environmentFile` is the one thing **not** managed by Nix: a file, outside
+the store, containing the two credential lines:
 
 ```
-mkdir -p /etc/ap-controller
-cp config.toml /etc/ap-controller/config.toml   # or write it directly
-chown ap-controller:ap-controller /etc/ap-controller/config.toml
-chmod 600 /etc/ap-controller/config.toml
+UNIFI_CONTROLLER_USERNAME=ap-scheduler
+UNIFI_CONTROLLER_PASSWORD=hunter2
 ```
+
+Create it by hand on the target machine (mode 600; root-owned is fine —
+systemd reads `EnvironmentFile=` before dropping to the `ap-controller`
+user), or point `environmentFile` at a sops-nix/agenix secret if you're
+already using one of those for other declarative secrets.
 
 (The `ap-controller` system user/group are created automatically by the
 module.)
@@ -157,11 +196,14 @@ since `aiohttp` ships manylinux wheels — no compiler needed.
    python3 -m venv venv
    ./venv/bin/pip install -r requirements.txt
    ```
-3. Create a dedicated user and a systemd unit:
+3. Create a credentials file (outside the app directory is fine too), a
+   dedicated user, and a systemd unit:
    ```
+   printf 'UNIFI_CONTROLLER_USERNAME=ap-scheduler\nUNIFI_CONTROLLER_PASSWORD=hunter2\n' \
+     > /opt/ap-controller/credentials.env
    useradd --system --no-create-home ap-controller
    chown -R ap-controller:ap-controller /opt/ap-controller
-   chmod 600 /opt/ap-controller/config.toml
+   chmod 600 /opt/ap-controller/credentials.env
    ```
    `/etc/systemd/system/ap-controller.service`:
    ```ini
@@ -174,6 +216,7 @@ since `aiohttp` ships manylinux wheels — no compiler needed.
    User=ap-controller
    Group=ap-controller
    Environment=AP_CONTROLLER_CONFIG=/opt/ap-controller/config.toml
+   EnvironmentFile=/opt/ap-controller/credentials.env
    ExecStart=/opt/ap-controller/venv/bin/python3 /opt/ap-controller/minimal.py
    PrivateTmp=true
    Restart=always
