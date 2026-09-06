@@ -74,8 +74,7 @@
                 serviceConfig = {
                   User = "ap-controller";
                   Group = "ap-controller";
-                  StateDirectory = "ap-controller";
-                  WorkingDirectory = "/var/lib/ap-controller";
+                  PrivateTmp = true;
                   ExecStart = "${self.packages.${pkgs.system}.default}/bin/ap-controller";
                   Restart = "always";
                   RestartSec = "5s";

@@ -13,7 +13,7 @@ from aiounifi.models.configuration import Configuration
 
 
 async def main() -> None:
-    host = input("Controller host: ")
+    host = input("Controller host [unifi]: ") or "unifi"
     port = int(input("Controller port [8443]: ") or "8443")
     site = input("Site id [default]: ") or "default"
     username = input("Username: ")

@@ -107,7 +107,7 @@ import aiohttp
 from aiounifi.controller import Controller
 from aiounifi.models.configuration import Configuration
 
-CONTROLLER_HOST = "your-controller-host"
+CONTROLLER_HOST = "unifi"
 CONTROLLER_PORT = 8443
 SITE = "your-site-id"
 USERNAME = "admin"          # replace
@@ -153,7 +153,7 @@ for config.toml. Confirm ports 4, 9, 21 appear in the port table.
 
 ```toml
 [controller]
-host = "your-controller-host"
+host = "unifi"
 port = 8443
 username = "admin"
 password = ""           # fill in

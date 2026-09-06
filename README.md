@@ -1,0 +1,175 @@
+# unifi-ap-scheduler
+
+Turns PoE on specific UniFi switch ports off overnight and back on in the
+morning, on a schedule. No web UI yet — this is the MVP: scheduler only.
+
+See [PROJECT.md](PROJECT.md) for the full design (including the planned
+FastAPI snooze UI, not yet built).
+
+## How it works
+
+- `discover.py` — run once, interactively, to find your switch's device MAC
+  and confirm port numbers/names. Prompts for controller host/port/site and
+  credentials; nothing is hardcoded or written to disk.
+- `minimal.py` — the scheduler. Reads `config.toml`, schedules two cron jobs
+  (off / on) via APScheduler, and on each firing logs into the UniFi
+  controller and sets the configured ports' PoE mode via `aiounifi`.
+- `config.toml` — your real config (controller credentials, switch MAC, port
+  list, schedule). Copy `config.example.toml` to create it. **Gitignored** —
+  it holds a plaintext password and never gets committed.
+- `flake.nix` — Nix dev shell, a `packages.default` build of the app, and a
+  `nixosModules.default` NixOS module for deploying it as a systemd service.
+
+## Requirements
+
+- [Nix](https://nixos.org/) with flakes enabled.
+- A local UniFi controller admin account (not your personal/cloud login) —
+  `aiounifi` only supports username/password, not API tokens.
+
+## Setup
+
+1. Enter the dev shell:
+   ```
+   nix develop
+   ```
+2. Find your switch's MAC and port numbers:
+   ```
+   python3 discover.py
+   ```
+   Enter your controller host, port, site id, and admin credentials when
+   prompted. Note the MAC and port indexes for the ports you want to
+   schedule.
+3. Create your config:
+   ```
+   cp config.example.toml config.toml
+   ```
+   Fill in `[controller]` (host/port/site/username/password) and one
+   `[[ports]]` entry per port, e.g.:
+   ```toml
+   [[ports]]
+   device_mac = "aa:bb:cc:dd:ee:ff"
+   port_idx   = 4
+   on_mode    = "auto"    # auto | pasv24 (passive 24v) | passthrough
+   ```
+   `on_mode` is what the port is restored to when turned back on — different
+   ports can use different modes (e.g. APs on `auto`, a passive-PoE device on
+   `pasv24`).
+
+## Running
+
+In the dev shell:
+
+```
+nix develop --command python3 minimal.py
+```
+
+Or point at a config file elsewhere via `AP_CONTROLLER_CONFIG`:
+
+```
+AP_CONTROLLER_CONFIG=/path/to/config.toml python3 minimal.py
+```
+
+It logs the next off/on times on startup, then logs each time it fires.
+Ctrl+C shuts it down cleanly. The APScheduler job store lives in a temp
+directory (not persisted — jobs are just recreated from `config.toml` on
+every start).
+
+## Verifying it works
+
+1. Temporarily set `off_hour`/`off_minute` (or `on_hour`/`on_minute`) in
+   `config.toml` to a couple of minutes from now.
+2. Run `minimal.py` and watch for the "Set port ... to poe=..." log line at
+   that time.
+3. Confirm in the UniFi UI that the port's PoE state actually changed.
+4. Restore the real schedule times.
+
+## Deploying (NixOS)
+
+Build the package to sanity-check it first:
+
+```
+nix build .#default
+result/bin/ap-controller   # reads AP_CONTROLLER_CONFIG or ./config.toml
+```
+
+To run it as a systemd service on a NixOS machine, import this flake's
+`nixosModules.default` into that machine's NixOS configuration (e.g. as a
+flake input), then:
+
+```nix
+services.ap-controller = {
+  enable = true;
+  # configFile defaults to /etc/ap-controller/config.toml
+};
+```
+
+The module does **not** manage `config.toml` — since it contains a plaintext
+password, create it by hand on the target machine:
+
+```
+mkdir -p /etc/ap-controller
+cp config.toml /etc/ap-controller/config.toml   # or write it directly
+chown ap-controller:ap-controller /etc/ap-controller/config.toml
+chmod 600 /etc/ap-controller/config.toml
+```
+
+(The `ap-controller` system user/group are created automatically by the
+module.)
+
+## Deploying to a non-Nix target
+
+Nix is only needed here to get a reproducible Python + `aiounifi` (a small,
+less-common package) install. On a regular Linux box, plain `pip` works fine
+since `aiohttp` ships manylinux wheels — no compiler needed.
+
+1. Copy `minimal.py`, `requirements.txt`, and your real `config.toml` to the
+   target machine, e.g. `/opt/ap-controller/`.
+2. Create a venv and install dependencies (needs Python 3.11+, for stdlib
+   `tomllib`):
+   ```
+   cd /opt/ap-controller
+   python3 -m venv venv
+   ./venv/bin/pip install -r requirements.txt
+   ```
+3. Create a dedicated user and a systemd unit:
+   ```
+   useradd --system --no-create-home ap-controller
+   chown -R ap-controller:ap-controller /opt/ap-controller
+   chmod 600 /opt/ap-controller/config.toml
+   ```
+   `/etc/systemd/system/ap-controller.service`:
+   ```ini
+   [Unit]
+   Description=AP Schedule Controller
+   After=network-online.target
+   Wants=network-online.target
+
+   [Service]
+   User=ap-controller
+   Group=ap-controller
+   Environment=AP_CONTROLLER_CONFIG=/opt/ap-controller/config.toml
+   ExecStart=/opt/ap-controller/venv/bin/python3 /opt/ap-controller/minimal.py
+   PrivateTmp=true
+   Restart=always
+   RestartSec=5s
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+4. Enable and start it:
+   ```
+   systemctl daemon-reload
+   systemctl enable --now ap-controller
+   journalctl -u ap-controller -f
+   ```
+
+## Known limitations
+
+- No web UI or snooze override yet (see PROJECT.md for the planned design).
+- Password-based auth only — no support for UniFi's token-based Integration
+  API.
+- All ports on the same switch must be listed together in `config.toml`;
+  `minimal.py` batches them into a single API request per device (a
+  UniFi/aiounifi quirk: setting one port's PoE mode overwrites the whole
+  device's port-override list, so per-port requests would clobber each
+  other).

@@ -8,6 +8,7 @@ No web UI. Run with: nix develop --command python3 minimal.py
 import asyncio
 import logging
 import os
+import tempfile
 import tomllib
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -90,41 +91,40 @@ def main():
     cfg = load_config()
     tz = ZoneInfo(cfg["schedule"]["timezone"])
 
-    jobstores = {
-        "default": SQLAlchemyJobStore(url="sqlite:///ap_controller.db")
-    }
+    db_path = Path(tempfile.mkdtemp(prefix="ap-controller-")) / "ap_controller.db"
+    jobstores = {"default": SQLAlchemyJobStore(url=f"sqlite:///{db_path}")}
     scheduler = BlockingScheduler(jobstores=jobstores, timezone=tz)
 
-    if not scheduler.get_job("poe_off"):
-        scheduler.add_job(
-            job_poe_off,
-            CronTrigger(
-                hour=cfg["schedule"]["off_hour"],
-                minute=cfg["schedule"]["off_minute"],
-                timezone=tz,
-            ),
-            id="poe_off",
-            replace_existing=True,
-        )
+    scheduler.add_job(
+        job_poe_off,
+        CronTrigger(
+            hour=cfg["schedule"]["off_hour"],
+            minute=cfg["schedule"]["off_minute"],
+            timezone=tz,
+        ),
+        id="poe_off",
+    )
 
-    if not scheduler.get_job("poe_on"):
-        scheduler.add_job(
-            job_poe_on,
-            CronTrigger(
-                hour=cfg["schedule"]["on_hour"],
-                minute=cfg["schedule"]["on_minute"],
-                timezone=tz,
-            ),
-            id="poe_on",
-            replace_existing=True,
-        )
+    scheduler.add_job(
+        job_poe_on,
+        CronTrigger(
+            hour=cfg["schedule"]["on_hour"],
+            minute=cfg["schedule"]["on_minute"],
+            timezone=tz,
+        ),
+        id="poe_on",
+    )
 
     log.info(
         f"Scheduler started. "
         f"off={cfg['schedule']['off_hour']}:{cfg['schedule']['off_minute']:02d} CT  "
         f"on={cfg['schedule']['on_hour']}:{cfg['schedule']['on_minute']:02d} CT"
     )
-    scheduler.start()
+    try:
+        scheduler.start()
+    except (KeyboardInterrupt, SystemExit):
+        log.info("Shutting down")
+        scheduler.shutdown()
 
 
 if __name__ == "__main__":

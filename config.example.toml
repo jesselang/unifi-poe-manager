@@ -1,5 +1,5 @@
 [controller]
-host = ""
+host = "unifi"
 port = 8443
 username = "" # create a local admin
 password = ""
