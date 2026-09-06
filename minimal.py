@@ -147,10 +147,10 @@ async def reconcile(cfg: dict, username: str, password: str) -> None:
                 log.info(f"Set port {idx} on {mac} to poe={mode}")
 
 
-def job_reconcile():
+def job_reconcile(trigger: str = "startup"):
     cfg = load_config()
     username, password = load_credentials()
-    log.info("Scheduled: reconciling PoE state")
+    log.info(f"Reconciling PoE state (trigger: {trigger})")
     asyncio.run(reconcile(cfg, username, password))
 
 
@@ -165,10 +165,13 @@ def main():
 
     times = sorted(trigger_times(cfg))
     for hour, minute in times:
+        label = f"{hour:02d}:{minute:02d}"
         scheduler.add_job(
             job_reconcile,
             CronTrigger(hour=hour, minute=minute, timezone=tz),
-            id=f"reconcile_{hour:02d}{minute:02d}",
+            args=[label],
+            id=f"reconcile_{label}",
+            name=f"Reconcile PoE @ {label}",
         )
 
     log.info(
