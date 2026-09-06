@@ -1,0 +1,17 @@
+[controller]
+host = ""
+port = 8443
+username = "" # create a local admin
+password = ""
+site = ""
+
+[schedule]
+off_hour   = 23
+off_minute = 59
+on_hour    = 6
+on_minute  = 0
+timezone   = "America/Chicago"
+
+[[ports]]
+device_mac = ""
+port_idx   = 1
