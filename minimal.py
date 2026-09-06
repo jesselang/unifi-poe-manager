@@ -36,8 +36,8 @@ def load_config() -> dict:
         return tomllib.load(f)
 
 
-async def set_poe(mode: str, cfg: dict) -> None:
-    """Set all configured ports to mode ('off' | 'auto')."""
+async def set_poe(turn_on: bool, cfg: dict) -> None:
+    """Turn configured ports off, or on to each port's configured on_mode."""
     async with aiohttp.ClientSession() as session:
         config = Configuration(
             session,
@@ -55,6 +55,7 @@ async def set_poe(mode: str, cfg: dict) -> None:
         for port_cfg in cfg["ports"]:
             mac = port_cfg["device_mac"]
             idx = port_cfg["port_idx"]
+            mode = port_cfg.get("on_mode", "auto") if turn_on else "off"
             device = ctrl.devices.get(mac)
             if device is None:
                 log.error(f"Device {mac} not found")
@@ -69,13 +70,13 @@ async def set_poe(mode: str, cfg: dict) -> None:
 def job_poe_off():
     cfg = load_config()
     log.info("Scheduled: turning APs off")
-    asyncio.run(set_poe("off", cfg))
+    asyncio.run(set_poe(False, cfg))
 
 
 def job_poe_on():
     cfg = load_config()
     log.info("Scheduled: turning APs on")
-    asyncio.run(set_poe("auto", cfg))
+    asyncio.run(set_poe(True, cfg))
 
 
 def main():

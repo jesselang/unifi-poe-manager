@@ -15,3 +15,4 @@ timezone   = "America/Chicago"
 [[ports]]
 device_mac = ""
 port_idx   = 1
+on_mode    = "auto"    # auto | pasv24 (passive 24v) | passthrough
