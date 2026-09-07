@@ -1,3 +1,4 @@
 /config.toml
 /ap_controller.db
 /.env
+/result

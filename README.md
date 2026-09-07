@@ -108,6 +108,23 @@ fires thereafter. Ctrl+C shuts it down cleanly. The APScheduler job store
 lives in a temp directory (not persisted — jobs are just recreated from
 `config.toml` on every start).
 
+## Running the built package
+
+To test the same artifact that gets deployed (rather than running `minimal.py`
+straight from source), build it with Nix and run the result:
+
+```
+nix build .#default
+cd /home/jesse/dev/unifi-ap-scheduler   # must run from here so .env is found
+AP_CONTROLLER_CONFIG=/home/jesse/dev/unifi-ap-scheduler/config.toml \
+  ./result/bin/ap-controller
+```
+
+The built binary's `minimal.py` lives in the Nix store, and `python-dotenv`
+searches for `.env` starting from the current *working directory* — so the
+command must be run from (or below) the repo root, not just from a shell
+that happens to have `nix build` available elsewhere.
+
 ## Testing
 
 The scheduling logic (`desired_mode`, `port_schedule`, `trigger_times` in
