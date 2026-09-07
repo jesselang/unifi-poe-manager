@@ -37,7 +37,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 CONFIG_PATH = Path(
-    os.environ.get("AP_CONTROLLER_CONFIG", Path(__file__).parent / "config.toml")
+    os.environ.get("UNIFI_POE_MANAGER_CONFIG", Path(__file__).parent / "config.toml")
 )
 
 
@@ -159,7 +159,7 @@ def main():
     load_credentials()  # fail fast if env vars are missing, before scheduling
     tz = ZoneInfo(cfg["schedule"]["timezone"])
 
-    db_path = Path(tempfile.mkdtemp(prefix="ap-controller-")) / "ap_controller.db"
+    db_path = Path(tempfile.mkdtemp(prefix="unifi-poe-manager-")) / "unifi_poe_manager.db"
     jobstores = {"default": SQLAlchemyJobStore(url=f"sqlite:///{db_path}")}
     scheduler = BlockingScheduler(jobstores=jobstores, timezone=tz)
 

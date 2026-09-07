@@ -2,8 +2,8 @@
 host = "unifi"
 port = 8443
 site = ""
-# Credentials are NOT read from this file — set AP_CONTROLLER_USERNAME and
-# AP_CONTROLLER_PASSWORD as environment variables when running minimal.py.
+# Credentials are NOT read from this file — set UNIFI_CONTROLLER_USERNAME and
+# UNIFI_CONTROLLER_PASSWORD as environment variables when running minimal.py.
 
 [schedule]
 off_hour   = 23

@@ -1,4 +1,4 @@
-# AP Schedule Controller — Claude Code Context
+# UniFi PoE Manager — Claude Code Context
 
 ## What This Builds
 
@@ -189,7 +189,7 @@ MVP entry point. Scheduler only — no web UI, no snooze.
 ```python
 #!/usr/bin/env python3
 """
-AP Schedule Controller — MVP
+UniFi PoE Manager — MVP
 Turns PoE off at 23:59 CT, on at 06:00 CT.
 No web UI. Run with: python minimal.py
 """
@@ -272,7 +272,7 @@ def main():
     tz = ZoneInfo(cfg["schedule"]["timezone"])
 
     jobstores = {
-        "default": SQLAlchemyJobStore(url="sqlite:///ap_controller.db")
+        "default": SQLAlchemyJobStore(url="sqlite:///unifi_poe_manager.db")
     }
     scheduler = BlockingScheduler(jobstores=jobstores, timezone=tz)
 
@@ -322,7 +322,7 @@ After running `python minimal.py`:
 2. Temporarily set `off_minute` to `now + 2` in config.toml, restart,
    watch for the PoE-off log line, confirm APs drop off the controller.
 3. Restore real schedule times.
-4. Check SQLite DB: `sqlite3 ap_controller.db "select * from apscheduler_jobs;"` —
+4. Check SQLite DB: `sqlite3 unifi_poe_manager.db "select * from apscheduler_jobs;"` —
    confirm two rows with correct next_run_time values.
 
 ---
@@ -333,14 +333,14 @@ Add to `configuration.nix`. Adjust `ExecStart` path to wherever the nix
 dev env python lives, or build a proper nix package/app for production.
 
 ```nix
-systemd.services.ap-controller = {
-  description = "AP Schedule Controller";
+systemd.services.unifi-poe-manager = {
+  description = "UniFi PoE Manager";
   after = [ "network.target" ];
   wantedBy = [ "multi-user.target" ];
   serviceConfig = {
-    User = "ap-controller";      # create this user or use your own
-    WorkingDirectory = "/opt/ap-controller";
-    ExecStart = "/path/to/nix/env/python /opt/ap-controller/minimal.py";
+    User = "unifi-poe-manager";      # create this user or use your own
+    WorkingDirectory = "/opt/unifi-poe-manager";
+    ExecStart = "/path/to/nix/env/python /opt/unifi-poe-manager/minimal.py";
     Restart = "always";
     RestartSec = "5s";
   };

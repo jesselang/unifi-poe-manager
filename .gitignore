@@ -1,4 +1,4 @@
 /config.toml
-/ap_controller.db
+/unifi_poe_manager.db
 /.env
 /result

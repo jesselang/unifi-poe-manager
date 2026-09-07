@@ -27,23 +27,23 @@
         };
 
         packages.default = pkgs.stdenv.mkDerivation {
-          pname = "ap-controller";
+          pname = "unifi-poe-manager";
           version = "0.1.0";
           src = ./.;
           nativeBuildInputs = [ pkgs.makeWrapper ];
           dontBuild = true;
           installPhase = ''
-            mkdir -p $out/share/ap-controller $out/bin
-            cp minimal.py $out/share/ap-controller/
-            makeWrapper ${pythonEnv}/bin/python3 $out/bin/ap-controller \
-              --add-flags $out/share/ap-controller/minimal.py
+            mkdir -p $out/share/unifi-poe-manager $out/bin
+            cp minimal.py $out/share/unifi-poe-manager/
+            makeWrapper ${pythonEnv}/bin/python3 $out/bin/unifi-poe-manager \
+              --add-flags $out/share/unifi-poe-manager/minimal.py
           '';
         };
       }) // {
         nixosModules.default = { config, lib, pkgs, ... }:
           with lib;
           let
-            cfg = config.services.ap-controller;
+            cfg = config.services.unifi-poe-manager;
 
             portSubmodule = types.submodule {
               options = {
@@ -60,7 +60,7 @@
               };
             };
 
-            configFile = (pkgs.formats.toml { }).generate "ap-controller-config.toml" {
+            configFile = (pkgs.formats.toml { }).generate "unifi-poe-manager-config.toml" {
               controller = {
                 host = cfg.controller.host;
                 port = cfg.controller.port;
@@ -84,18 +84,18 @@
               }) cfg.ports;
             };
           in {
-            options.services.ap-controller = {
-              enable = mkEnableOption "AP schedule controller (PoE on/off via UniFi API)";
+            options.services.unifi-poe-manager = {
+              enable = mkEnableOption "UniFi PoE manager (scheduled PoE on/off via UniFi API)";
 
               environmentFile = mkOption {
                 type = types.path;
-                example = "/run/secrets/ap-controller-env";
+                example = "/run/secrets/unifi-poe-manager-env";
                 description = ''
                   Path (outside the Nix store) to an EnvironmentFile holding
-                  AP_CONTROLLER_USERNAME and AP_CONTROLLER_PASSWORD, e.g.:
+                  UNIFI_CONTROLLER_USERNAME and UNIFI_CONTROLLER_PASSWORD, e.g.:
 
-                    AP_CONTROLLER_USERNAME=ap-scheduler
-                    AP_CONTROLLER_PASSWORD=hunter2
+                    UNIFI_CONTROLLER_USERNAME=poe-manager
+                    UNIFI_CONTROLLER_PASSWORD=hunter2
 
                   This is the only place credentials live — everything else
                   is declared in Nix and safe to commit. Not managed by this
@@ -127,24 +127,24 @@
             };
 
             config = mkIf cfg.enable {
-              users.users.ap-controller = {
+              users.users.unifi-poe-manager = {
                 isSystemUser = true;
-                group = "ap-controller";
+                group = "unifi-poe-manager";
               };
-              users.groups.ap-controller = { };
+              users.groups.unifi-poe-manager = { };
 
-              systemd.services.ap-controller = {
-                description = "AP Schedule Controller";
+              systemd.services.unifi-poe-manager = {
+                description = "UniFi PoE Manager";
                 after = [ "network-online.target" ];
                 wants = [ "network-online.target" ];
                 wantedBy = [ "multi-user.target" ];
-                environment.AP_CONTROLLER_CONFIG = configFile;
+                environment.UNIFI_POE_MANAGER_CONFIG = configFile;
                 serviceConfig = {
-                  User = "ap-controller";
-                  Group = "ap-controller";
+                  User = "unifi-poe-manager";
+                  Group = "unifi-poe-manager";
                   PrivateTmp = true;
                   EnvironmentFile = cfg.environmentFile;
-                  ExecStart = "${self.packages.${pkgs.system}.default}/bin/ap-controller";
+                  ExecStart = "${self.packages.${pkgs.system}.default}/bin/unifi-poe-manager";
                   Restart = "always";
                   RestartSec = "5s";
                 };
