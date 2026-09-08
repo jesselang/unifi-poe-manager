@@ -10,16 +10,25 @@ from aiounifi.controller import Controller
 from aiounifi.models.configuration import Configuration
 from aiounifi.models.device import DeviceSetPoePortModeRequest
 
-from .config import desired_mode
+from .snooze import effective_mode
 
 log = logging.getLogger(__name__)
 
 
-async def reconcile(ctrl: Controller, cfg: dict, now: datetime) -> None:
+async def reconcile(
+    ctrl: Controller,
+    cfg: dict,
+    now: datetime,
+    snooze_until: datetime | None = None,
+) -> None:
     """Set every configured port to what its own schedule says it should be
     right now. Always recomputed from config + wall clock (not from what we
     last set), so it's safe to call at startup, after a restart, or from
     multiple trigger times without depending on prior state.
+
+    snooze_until, when set and in the future, forces every port on instead
+    (see snooze.effective_mode) — used by the web app; the headless CLI
+    never passes it.
 
     Assumes ctrl is already logged in with an up-to-date device list."""
     # Group by device: DeviceSetPoePortModeRequest.create() overwrites a
@@ -30,7 +39,7 @@ async def reconcile(ctrl: Controller, cfg: dict, now: datetime) -> None:
     for port_cfg in cfg["ports"]:
         mac = port_cfg["device_mac"]
         idx = port_cfg["port_idx"]
-        mode = desired_mode(now, port_cfg, cfg["schedule"])
+        mode = effective_mode(now, snooze_until, port_cfg, cfg["schedule"])
         targets_by_mac.setdefault(mac, []).append((idx, mode))
 
     for mac, targets in targets_by_mac.items():
