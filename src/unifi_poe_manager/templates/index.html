@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>UniFi PoE Manager</title>
   <script src="/static/htmx.min.js"></script>
+  <script src="/static/json-enc.js"></script>
   <style>
     :root { color-scheme: light dark; }
     body {
@@ -14,35 +15,64 @@
       padding: 1rem;
     }
     h1 { font-size: 1.25rem; }
-    h2 { font-size: 1rem; margin-bottom: 0.5rem; }
-    .next-trigger { opacity: 0.7; font-size: 0.9rem; }
-    .global-controls {
+    h2 { font-size: 1rem; margin: 0 0 0.5rem; }
+    ul.ports { list-style: none; padding: 0; margin: 0; }
+    .scope {
       margin: 1rem 0;
       padding: 0.75rem;
       border: 1px solid currentColor;
       border-radius: 0.5rem;
     }
+    .port-name { font-weight: bold; }
+    .port-sub { display: block; font-size: 0.75rem; opacity: 0.6; }
+    .state-line {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      margin: 0.4rem 0;
+    }
+    .state-dot {
+      width: 0.6rem;
+      height: 0.6rem;
+      border-radius: 50%;
+      flex: none;
+    }
+    .state-dot.on { background: #2e8b57; }
+    .state-dot.off { background: #888; }
+    .scope-controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem;
+    }
     button {
       font-size: 1rem;
       padding: 0.6rem 1rem;
-      margin: 0.15rem;
       border-radius: 0.4rem;
       border: 1px solid currentColor;
       background: transparent;
       color: inherit;
     }
-    ul.ports { list-style: none; padding: 0; }
-    li.port {
-      padding: 0.75rem;
-      margin-bottom: 0.5rem;
-      border: 1px solid currentColor;
-      border-radius: 0.5rem;
+    button.primary { font-weight: bold; }
+    .duration-row {
+      display: flex;
+      align-items: center;
+      gap: 0.3rem;
     }
-    li.port-off { opacity: 0.7; }
-    .port-info { display: flex; flex-direction: column; margin-bottom: 0.5rem; }
-    .port-name { font-weight: bold; }
-    .port-mode { text-transform: uppercase; font-size: 0.85rem; }
-    .override-badge { font-size: 0.8rem; opacity: 0.8; }
+    .duration-label { font-size: 0.8rem; opacity: 0.7; }
+    button.pill {
+      font-size: 0.85rem;
+      padding: 0.4rem 0.7rem;
+    }
+    button.link {
+      border: none;
+      padding: 0.2rem 0;
+      font-size: 0.8rem;
+      text-decoration: underline;
+      opacity: 0.7;
+      flex-basis: 100%;
+      text-align: left;
+    }
   </style>
 </head>
 <body>

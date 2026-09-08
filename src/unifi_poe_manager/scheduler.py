@@ -2,7 +2,7 @@
 an AsyncIOScheduler, used identically by the FastAPI app and by headless
 (--no-web) mode. One process, one scheduler instance, one login.
 
-A manual override (snooze/turn-on-now/turn-off-now) has no state of its own
+A manual override (turn-on-for/turn-on-now/turn-off-now) has no state of its own
 — "forced on/off until X" is just the next_run_time of a one-shot job whose
 callback is the *same* job_reconcile every cron trigger uses, and its
 direction ("on" or "off") is encoded in which of two job ids is active for a
@@ -13,7 +13,7 @@ existing override in the other direction for the same scope, so at most one
 job per scope is ever active. A regularly scheduled cron trigger firing
 during an active override doesn't need to be paused/skipped: it calls
 reconcile() with the live override(s) like everything else, and
-effective_mode() (see snooze.py) does the overriding. When a one-shot
+effective_mode() (see override.py) does the overriding. When a one-shot
 override job itself fires, APScheduler has already removed it (a
 DateTrigger job's next_run_time becomes None as soon as it's submitted to
 run, before the callback executes), so that same reconcile call sees "no
@@ -38,8 +38,8 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 
 from .config import port_schedule, trigger_times
+from .override import Override, effective_mode
 from .poe import reconcile
-from .snooze import Override, effective_mode
 
 log = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ def _job_id(scope: str, forced: Literal["on", "off"]) -> str:
 @dataclass
 class PoeScheduler:
     """Wraps an AsyncIOScheduler + an already-logged-in Controller. All
-    controller access goes through `lock` so scheduled jobs, /snooze, and
+    controller access goes through `lock` so scheduled jobs, /override, and
     /status's live device query never race on the same aiounifi session."""
 
     cfg: dict
@@ -69,9 +69,30 @@ class PoeScheduler:
     # Overridable for tests, which need deterministic "now" rather than the
     # real wall clock — production leaves this unset and gets real time.
     clock: Callable[[], datetime] | None = None
+    # Cached from the controller's port_table (see _refresh_port_names),
+    # keyed by (mac, idx) — so status() can show a human-friendly name
+    # without a network call of its own.
+    port_names: dict[tuple[str, int], str] = field(default_factory=dict)
 
     def _now(self) -> datetime:
         return self.clock() if self.clock is not None else datetime.now(tz=self.tz)
+
+    def _refresh_port_names(self) -> None:
+        """Update the cached UniFi-side name for every configured port from
+        the controller's (already fetched) device data. Cheap/sync — no
+        network call itself, just reads what ctrl.devices.update() already
+        pulled down."""
+        for port_cfg in self.cfg["ports"]:
+            mac, idx = port_cfg["device_mac"], port_cfg["port_idx"]
+            device = self.ctrl.devices.get(mac)
+            if device is None:
+                continue
+            for port in device.port_table:
+                if port.get("port_idx") == idx:
+                    name = port.get("name")
+                    if name:
+                        self.port_names[(mac, idx)] = name
+                    break
 
     def register_jobs(self) -> None:
         for hour, minute in sorted(trigger_times(self.cfg)):
@@ -119,16 +140,24 @@ class PoeScheduler:
             return global_until, global_forced
         return None
 
+    def _any_port_on(self, now: datetime) -> bool:
+        return any(
+            effective_mode(now, self._get_override(port_cfg), port_cfg, self.cfg["schedule"])
+            != "off"
+            for port_cfg in self.cfg["ports"]
+        )
+
     async def job_reconcile(self, trigger: str) -> None:
         async with self.lock:
             now = self._now()
             log.info(f"Reconciling PoE state (trigger: {trigger})")
             await self.ctrl.devices.update()
+            self._refresh_port_names()
             await reconcile(self.ctrl, self.cfg, now, self._get_override)
 
     def next_trigger_after(self, now: datetime) -> datetime:
         """The next regularly scheduled cron trigger time after `now`,
-        across all ports — used by the global "turn on now" to snooze
+        across all ports — used by the global "turn on now" to override
         exactly until the schedule would next act anyway, rather than a
         fixed duration."""
         candidates = [
@@ -172,12 +201,55 @@ class PoeScheduler:
         )
         await self.job_reconcile(f"{job_id}_start")
 
-    async def snooze(self, minutes: int) -> datetime:
-        """Force every port on for `minutes`, then revert to the normal
-        schedule."""
-        until = self._now() + timedelta(minutes=minutes)
-        await self._set_override(_GLOBAL_SCOPE, until, "on")
-        return until
+    async def _clear_scope_override(self, scope: str) -> None:
+        """Remove whichever override job (on or off) is active for `scope`
+        and immediately reconcile so the effect is visible right away,
+        rather than waiting for the next cron trigger. A no-op (no
+        reconcile either) if nothing was active — safe to call
+        speculatively from a UI button."""
+        removed = False
+        for forced in ("on", "off"):
+            job_id = _job_id(scope, forced)
+            if self.scheduler.get_job(job_id) is not None:
+                self.scheduler.remove_job(job_id)
+                removed = True
+        if removed:
+            await self.job_reconcile(f"{scope}_cleared")
+
+    async def clear_override(self) -> None:
+        """Remove the active global override, if any, and revert
+        immediately to the plain schedule. Ports with their own
+        port-specific override are unaffected."""
+        await self._clear_scope_override(_GLOBAL_SCOPE)
+
+    async def clear_port_override(self, mac: str, idx: int) -> None:
+        """Remove this port's own override, if any, and revert immediately
+        to whatever it would otherwise be — the plain schedule, or an
+        inherited global override. Does not touch the global override
+        itself; use clear_override() for that."""
+        self._find_port(mac, idx)
+        await self._clear_scope_override(_port_scope(mac, idx))
+
+    async def turn_on_for(self, minutes: int) -> datetime:
+        """Turn on for `minutes`, then revert to the normal schedule.
+
+        If currently off, this starts a fresh `minutes`-long window from
+        now. If already on (via an active "on" override, or just the plain
+        schedule), this instead *extends* that on-period by `minutes` from
+        its current end — delaying the eventual off — rather than
+        restarting the clock from whenever the button happened to be
+        pressed."""
+        now = self._now()
+        active, until, forced = self.global_override_status()
+        if active and forced == "on":
+            baseline = until
+        elif self._any_port_on(now):
+            baseline = self.next_trigger_after(now)
+        else:
+            baseline = now
+        new_until = baseline + timedelta(minutes=minutes)
+        await self._set_override(_GLOBAL_SCOPE, new_until, "on")
+        return new_until
 
     async def turn_on_now(self) -> datetime:
         """Force every port on until the schedule's next trigger would act
@@ -193,11 +265,24 @@ class PoeScheduler:
         await self._set_override(_GLOBAL_SCOPE, until, "off")
         return until
 
-    async def snooze_port(self, mac: str, idx: int, minutes: int) -> datetime:
-        """Force just this port on for `minutes`, overriding any active
-        global override for it, then revert to its own schedule."""
-        self._find_port(mac, idx)
-        until = self._now() + timedelta(minutes=minutes)
+    async def turn_on_port_for(self, mac: str, idx: int, minutes: int) -> datetime:
+        """Turn this port on for `minutes`, then revert to its own
+        schedule. Same extend-vs-fresh-start logic as turn_on_for(), except
+        the "already on" baseline here is whichever override is actually in
+        effect for this port — its own, or one it's inheriting from the
+        global scope — so extending a port that's only on because of a
+        global override builds on that deadline instead of cutting it
+        short."""
+        port_cfg = self._find_port(mac, idx)
+        now = self._now()
+        override = self._get_override(port_cfg)
+        if override is not None and override[1] == "on":
+            baseline = override[0]
+        elif effective_mode(now, override, port_cfg, self.cfg["schedule"]) != "off":
+            baseline = self.next_port_trigger_after(port_cfg, now)
+        else:
+            baseline = now
+        until = baseline + timedelta(minutes=minutes)
         await self._set_override(_port_scope(mac, idx), until, "on")
         return until
 
@@ -230,19 +315,41 @@ class PoeScheduler:
         for port_cfg in self.cfg["ports"]:
             mac, idx = port_cfg["device_mac"], port_cfg["port_idx"]
             port_active, port_until, port_forced = self.port_override_status(mac, idx)
-            override = (
-                (port_until, port_forced)
-                if port_active
-                else ((global_until, global_forced) if global_active else None)
-            )
+            if port_active:
+                effective_until, effective_forced = port_until, port_forced
+            elif global_active:
+                effective_until, effective_forced = global_until, global_forced
+            else:
+                effective_until, effective_forced = None, None
+            override = (effective_until, effective_forced) if effective_until else None
             ports.append(
                 {
                     "device_mac": mac,
                     "port_idx": idx,
+                    "name": self.port_names.get((mac, idx)),
                     "mode": effective_mode(now, override, port_cfg, self.cfg["schedule"]),
+                    # this port's OWN override only — distinct from one it
+                    # may be inheriting from the global scope
                     "override_active": port_active,
                     "override_until": port_until.isoformat() if port_until else None,
                     "override_mode": port_forced,
+                    # the override actually in effect for this port right
+                    # now, whether set on it directly or inherited from the
+                    # global scope — this (not the above) is what decides
+                    # whether "next trigger" below is a trustworthy
+                    # prediction (see effective_mode's docs: once an
+                    # override is active, the next cron trigger firing
+                    # doesn't necessarily flip the state, since the
+                    # override may already have preempted that exact
+                    # transition)
+                    "effective_override_active": effective_until is not None,
+                    "effective_override_until": (
+                        effective_until.isoformat() if effective_until else None
+                    ),
+                    "effective_override_mode": effective_forced,
+                    # this port's own next trigger, not the global one —
+                    # what its "turn on/off now" button would set until
+                    "next_trigger": self.next_port_trigger_after(port_cfg, now).isoformat(),
                 }
             )
         return {

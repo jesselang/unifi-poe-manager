@@ -1,8 +1,8 @@
 # unifi-poe-manager
 
 Turns PoE on specific UniFi switch ports off overnight and back on in the
-morning, on a schedule, with a LAN-only web UI for manual overrides (snooze,
-turn on/off now — globally or per port).
+morning, on a schedule, with a LAN-only web UI for manual overrides (turn
+on/off now, or on for a set duration — globally or per port).
 
 See [PROJECT.md](PROJECT.md) for the original design notes.
 
@@ -14,14 +14,14 @@ See [PROJECT.md](PROJECT.md) for the original design notes.
 - `src/unifi_poe_manager/` — the app, as a package:
   - `config.py` — pure config/credential loading and the port-schedule logic
     (`desired_mode`, `port_schedule`, `trigger_times`).
-  - `snooze.py` — `effective_mode()`, the pure logic for a manual override
+  - `override.py` — `effective_mode()`, the pure logic for a manual override
     (force a port on or off until a deadline, otherwise defer to the normal
     schedule).
   - `poe.py` — `reconcile()`, the controller-facing logic that sets every
     configured port to its current desired/overridden mode via `aiounifi`.
   - `scheduler.py` — `PoeScheduler`, the shared APScheduler instance + a
     long-lived, already-logged-in controller session. Owns the cron jobs
-    (one per distinct off/on time) and the snooze/turn-on-now/turn-off-now
+    (one per distinct off/on time) and the turn-on-now/turn-off-now/turn-on-for
     machinery, both globally and per port — see the module docstring for how
     overrides are represented as scheduler jobs with no separate state.
   - `app.py` — the FastAPI app: an htmx-driven web page (`templates/`) plus
@@ -39,6 +39,45 @@ See [PROJECT.md](PROJECT.md) for the original design notes.
 - `flake.nix` — Nix dev shell, a `packages.default` build of the app, and a
   `nixosModules.default` NixOS module for deploying it as a systemd service
   (which declares the non-secret config directly in Nix — see below).
+
+## Manual overrides
+
+The web UI/API can force a port (or every port) on or off outside its
+normal schedule, two ways:
+
+- **Now, until the schedule would next act anyway** (`POST /on`, `POST
+  /off`, and the per-port equivalents under `/ports/{mac}/{idx}/...`) —
+  e.g. pressing "turn off" while on forces it off until the next scheduled
+  trigger, then reverts to the plain schedule.
+- **For a fixed duration** (`POST /override {"minutes": 30|60|120}`, the
+  30m/1h/2h buttons). What this does depends on the current state:
+  - **Currently off** — starts a fresh window of that length from now
+    ("on for 30 min" means on until 30 minutes from now).
+  - **Currently on** (via the plain schedule, or an already-active
+    override) — *extends* the current on-period by that many minutes from
+    its existing end, rather than restarting the clock from whenever the
+    button was pressed. So pressing "extend 30 min" a minute before a
+    scheduled off delays that off by the full 30 minutes (not 29), and
+    pressing it twice adds 30 then another 30 from the first override's
+    end, not two overlapping 30-minute windows from each click.
+
+A **port-specific** override always takes precedence over the **global**
+one for that port. This includes duration extends: a per-port "extend"
+builds on whichever deadline is actually keeping that port on right now —
+its own override if it has one, otherwise an inherited global override, or
+else the plain schedule's next off time — so it never accidentally cuts a
+longer global override short.
+
+Either kind of override can be cancelled outright and reverted to the
+plain schedule immediately, via `DELETE /override` (global) or `DELETE
+/ports/{mac}/{idx}/override` (that port only) — the "Revert to schedule"
+link on the page. A per-port revert clears only that port's own override;
+if it was only on because of an inherited global override, that global
+override is untouched (use the global revert for that).
+
+No override survives a restart: they live only in the scheduler's
+in-memory job store and are dropped when the process restarts, reverting
+every port to the plain `config.toml` schedule.
 
 ## Requirements
 
@@ -101,9 +140,9 @@ By default this starts the web UI (bound to `0.0.0.0:8000`, i.e. reachable
 from other devices on the LAN, not just localhost — override with
 `--host`/`--port`) alongside the scheduler, sharing one controller login.
 Open `http://<this-machine>:8000/` for the status page, or use the JSON API
-directly (`GET /status`, `POST /snooze` `{"minutes": 30|60|120}`,
-`POST /on`, `POST /off`, and the per-port equivalents at
-`/ports/{mac}/{idx}/...`).
+directly (`GET /status`, `POST /override` `{"minutes": 30|60|120}`,
+`POST /on`, `POST /off`, `DELETE /override`, and the per-port equivalents
+at `/ports/{mac}/{idx}/...`).
 
 Pass `--no-web` to run just the scheduler, headless, with no HTTP server:
 
@@ -133,10 +172,10 @@ exits immediately with a clear error if either is missing.
 Either way, it logs the scheduled reconcile times on startup, immediately
 reconciles state once (so a restart mid-window corrects itself), then logs
 each time it fires thereafter, plus whenever a manual override is set via
-the web UI/API. Ctrl+C shuts it down cleanly. The APScheduler job store
-lives in a temp directory (not persisted — jobs, including any active
-snooze/override, are just recreated from `config.toml` on every start, so a
-restart always drops back to the plain schedule).
+the web UI/API. Ctrl+C shuts it down cleanly. The APScheduler job store is
+in-memory (not persisted — jobs, including any active override, are just
+recreated from `config.toml` on every start, so a restart always drops back
+to the plain schedule).
 
 ## Running the built package
 
@@ -159,13 +198,14 @@ have `nix build` available elsewhere.
 
 Unit-tested in `tests/`, all without a real controller or network:
 
-- `config.py`'s pure schedule logic and `snooze.py`'s override logic
+- `config.py`'s pure schedule logic and `override.py`'s override logic
   (`effective_mode`).
 - `poe.py`'s `reconcile()` against a fake `aiounifi` controller.
-- `scheduler.py`'s `PoeScheduler` (snooze, turn-on/off-now, global vs.
-  per-port override precedence) against a real in-memory `AsyncIOScheduler`
-  and a fake controller, with an injectable clock so time-window assertions
-  aren't at the mercy of when the suite happens to run.
+- `scheduler.py`'s `PoeScheduler` (turn-on-for/turn-on-now/turn-off-now,
+  global vs. per-port override precedence) against a real in-memory
+  `AsyncIOScheduler` and a fake controller, with an injectable clock so
+  time-window assertions aren't at the mercy of when the suite happens to
+  run.
 - `app.py`'s routes via FastAPI's `TestClient`, with the scheduler dependency
   swapped for a stub — covers request validation, JSON-vs-htmx-fragment
   content negotiation, and 404s, not real scheduling behavior (that's
@@ -193,11 +233,12 @@ Scheduled behavior:
 Web UI:
 
 1. Run the CLI without `--no-web` and open `http://<host>:8000/`.
-2. Press a snooze/turn-on/turn-off button (global or per-port) and confirm
-   the page updates in place (no full reload) and the log shows the
-   corresponding "Set port ... to poe=..." line.
-3. Confirm the UniFi UI reflects the change, and that the page's "Next
-   scheduled change" / override badge match what you expect.
+2. Press a turn-on/turn-off/duration (30m/1h/2h) button (global or per-port)
+   and confirm the page updates in place (no full reload) and the log shows
+   the corresponding "Set port ... to poe=..." line.
+3. Confirm the UniFi UI reflects the change, and that the page's status
+   line ("ON/OFF — next ... at HH:MM", or "manually set until HH:MM" once
+   overridden) matches what you expect.
 
 ## Deploying (NixOS)
 
@@ -314,7 +355,7 @@ since `aiohttp` ships manylinux wheels — no compiler needed.
 
 ## Known limitations
 
-- No authentication on the web UI/API — anyone on the LAN can snooze or
+- No authentication on the web UI/API — anyone on the LAN can override or
   toggle ports. Acceptable for a home network; don't expose port 8000
   beyond it.
 - Password-based auth only against the controller — no support for UniFi's
@@ -324,5 +365,5 @@ since `aiohttp` ships manylinux wheels — no compiler needed.
   UniFi/aiounifi quirk: setting one port's PoE mode overwrites the whole
   device's port-override list, so per-port requests would clobber each
   other).
-- Any active snooze/override is dropped on restart — it lives only in the
+- Any active override is dropped on restart — it lives only in the
   in-memory-for-this-run job store, not `config.toml`.

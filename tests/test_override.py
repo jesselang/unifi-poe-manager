@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from unifi_poe_manager.snooze import effective_mode
+from unifi_poe_manager.override import effective_mode
 
 GLOBAL = {"off_hour": 23, "off_minute": 59, "on_hour": 6, "on_minute": 0}
 PORT = {"on_mode": "pasv24"}

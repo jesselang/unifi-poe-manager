@@ -1,5 +1,5 @@
 """FastAPI app: a mobile-first HTML page (htmx-driven, no page reloads on
-snooze/turn-on/turn-off) plus the same actions as a plain JSON API for any
+override/turn-on/turn-off) plus the same actions as a plain JSON API for any
 other consumer. Every mutating/status route returns JSON normally, or a
 rendered HTML fragment when called by htmx (detected via the `HX-Request`
 header) — see _status_response().
@@ -57,7 +57,7 @@ def get_scheduler(request: Request) -> PoeScheduler:
     return request.app.state.scheduler
 
 
-class SnoozeRequest(BaseModel):
+class OverrideRequest(BaseModel):
     minutes: Literal[30, 60, 120]
 
 
@@ -82,11 +82,11 @@ async def status(request: Request, scheduler: PoeScheduler = Depends(get_schedul
     return _status_response(request, scheduler)
 
 
-@app.post("/snooze")
-async def snooze(
-    request: Request, body: SnoozeRequest, scheduler: PoeScheduler = Depends(get_scheduler)
+@app.post("/override")
+async def override(
+    request: Request, body: OverrideRequest, scheduler: PoeScheduler = Depends(get_scheduler)
 ):
-    await scheduler.snooze(body.minutes)
+    await scheduler.turn_on_for(body.minutes)
     return _status_response(request, scheduler)
 
 
@@ -102,16 +102,22 @@ async def turn_off_now(request: Request, scheduler: PoeScheduler = Depends(get_s
     return _status_response(request, scheduler)
 
 
-@app.post("/ports/{mac}/{idx}/snooze")
-async def snooze_port(
+@app.delete("/override")
+async def clear_override(request: Request, scheduler: PoeScheduler = Depends(get_scheduler)):
+    await scheduler.clear_override()
+    return _status_response(request, scheduler)
+
+
+@app.post("/ports/{mac}/{idx}/override")
+async def override_port(
     request: Request,
     mac: str,
     idx: int,
-    body: SnoozeRequest,
+    body: OverrideRequest,
     scheduler: PoeScheduler = Depends(get_scheduler),
 ):
     try:
-        await scheduler.snooze_port(mac, idx, body.minutes)
+        await scheduler.turn_on_port_for(mac, idx, body.minutes)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"No configured port {idx} on {mac}")
     return _status_response(request, scheduler)
@@ -134,6 +140,17 @@ async def turn_off_port_now(
 ):
     try:
         await scheduler.turn_off_port_now(mac, idx)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"No configured port {idx} on {mac}")
+    return _status_response(request, scheduler)
+
+
+@app.delete("/ports/{mac}/{idx}/override")
+async def clear_port_override(
+    request: Request, mac: str, idx: int, scheduler: PoeScheduler = Depends(get_scheduler)
+):
+    try:
+        await scheduler.clear_port_override(mac, idx)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"No configured port {idx} on {mac}")
     return _status_response(request, scheduler)

@@ -1,61 +1,107 @@
 <section
   id="status"
   class="status"
+  hx-ext="json-enc"
   hx-get="/status"
   hx-trigger="every 60s"
   hx-swap="outerHTML"
 >
-  <p class="next-trigger">Next scheduled change: {{ status.next_trigger | hhmm }}</p>
-
-  <div class="global-controls">
+  {% set any_on = status.ports | selectattr("mode", "ne", "off") | list | length > 0 %}
+  <div class="scope global-controls">
     <h2>All ports</h2>
-    {% if status.override_active %}
-    <p class="override-badge">
-      Forced {{ status.override_mode }} until {{ status.override_until | hhmm }}
+    <p class="state-line">
+      <span class="state-dot {{ 'on' if any_on else 'off' }}"></span>
+      {% if status.override_active %}
+      {{ "ON" if any_on else "OFF" }} — manually set until {{ status.override_until | hhmm }}
+      {% else %}
+      {{ "ON" if any_on else "OFF" }} — next {{ "OFF" if any_on else "ON" }} at {{ status.next_trigger | hhmm }}
+      {% endif %}
     </p>
-    {% endif %}
-    {% set any_on = status.ports | selectattr("mode", "ne", "off") | list | length > 0 %}
-    {% if any_on %}
-    <button hx-post="/off" hx-target="#status" hx-swap="outerHTML">Turn off now</button>
-    {% else %}
-    <button hx-post="/on" hx-target="#status" hx-swap="outerHTML">Turn on now</button>
-    <button hx-post="/snooze" hx-vals='{"minutes": 30}' hx-target="#status" hx-swap="outerHTML">+30 min</button>
-    <button hx-post="/snooze" hx-vals='{"minutes": 60}' hx-target="#status" hx-swap="outerHTML">+1 hr</button>
-    <button hx-post="/snooze" hx-vals='{"minutes": 120}' hx-target="#status" hx-swap="outerHTML">+2 hr</button>
-    {% endif %}
+    <div class="scope-controls">
+      {% if any_on %}
+      <button class="primary" hx-post="/off" hx-target="#status" hx-swap="outerHTML">Turn off</button>
+      {% set duration_label = "extend" %}
+      {% else %}
+      <button class="primary" hx-post="/on" hx-target="#status" hx-swap="outerHTML">Turn on</button>
+      {% set duration_label = "on for" %}
+      {% endif %}
+      <span class="duration-row">
+        <span class="duration-label">{{ duration_label }}</span>
+        <button class="pill" hx-post="/override" hx-vals='{"minutes": 30}' hx-target="#status" hx-swap="outerHTML">30m</button>
+        <button class="pill" hx-post="/override" hx-vals='{"minutes": 60}' hx-target="#status" hx-swap="outerHTML">1h</button>
+        <button class="pill" hx-post="/override" hx-vals='{"minutes": 120}' hx-target="#status" hx-swap="outerHTML">2h</button>
+      </span>
+      {% if status.override_active %}
+      <button class="link" hx-delete="/override" hx-target="#status" hx-swap="outerHTML">Revert to schedule</button>
+      {% endif %}
+    </div>
   </div>
 
   <ul class="ports">
     {% for port in status.ports %}
-    <li class="port {{ 'port-off' if port.mode == 'off' else 'port-on' }}">
-      <div class="port-info">
-        <span class="port-name">{{ port.device_mac }} · port {{ port.port_idx }}</span>
-        <span class="port-mode">{{ port.mode }}</span>
-        {% if port.override_active %}
-        <span class="override-badge">
-          forced {{ port.override_mode }} until {{ port.override_until | hhmm }}
-        </span>
+    {% set port_on = port.mode != "off" %}
+    <li class="scope port">
+      <span class="port-name">{{ port.name or (port.device_mac ~ " · port " ~ port.port_idx) }}</span>
+      {% if port.name %}
+      <span class="port-sub">{{ port.device_mac }} · port {{ port.port_idx }}</span>
+      {% endif %}
+      <p class="state-line">
+        <span class="state-dot {{ 'on' if port_on else 'off' }}"></span>
+        {% if port.effective_override_active %}
+        {{ "ON" if port_on else "OFF" }} — manually set until {{ port.effective_override_until | hhmm }}
+        {% else %}
+        {{ "ON" if port_on else "OFF" }} — next {{ "OFF" if port_on else "ON" }} at {{ port.next_trigger | hhmm }}
         {% endif %}
-      </div>
-      <div class="port-controls">
-        {% if port.mode != "off" %}
+      </p>
+      <div class="scope-controls">
+        {% if port_on %}
         <button
+          class="primary"
           hx-post="/ports/{{ port.device_mac }}/{{ port.port_idx }}/off"
           hx-target="#status"
           hx-swap="outerHTML"
         >Turn off</button>
+        {% set port_duration_label = "extend" %}
         {% else %}
         <button
+          class="primary"
           hx-post="/ports/{{ port.device_mac }}/{{ port.port_idx }}/on"
           hx-target="#status"
           hx-swap="outerHTML"
-        >Turn on now</button>
+        >Turn on</button>
+        {% set port_duration_label = "on for" %}
+        {% endif %}
+        <span class="duration-row">
+          <span class="duration-label">{{ port_duration_label }}</span>
+          <button
+            class="pill"
+            hx-post="/ports/{{ port.device_mac }}/{{ port.port_idx }}/override"
+            hx-vals='{"minutes": 30}'
+            hx-target="#status"
+            hx-swap="outerHTML"
+          >30m</button>
+          <button
+            class="pill"
+            hx-post="/ports/{{ port.device_mac }}/{{ port.port_idx }}/override"
+            hx-vals='{"minutes": 60}'
+            hx-target="#status"
+            hx-swap="outerHTML"
+          >1h</button>
+          <button
+            class="pill"
+            hx-post="/ports/{{ port.device_mac }}/{{ port.port_idx }}/override"
+            hx-vals='{"minutes": 120}'
+            hx-target="#status"
+            hx-swap="outerHTML"
+          >2h</button>
+        </span>
+        {% if port.override_active %}
         <button
-          hx-post="/ports/{{ port.device_mac }}/{{ port.port_idx }}/snooze"
-          hx-vals='{"minutes": 30}'
+          class="link"
+          hx-delete="/ports/{{ port.device_mac }}/{{ port.port_idx }}/override"
           hx-target="#status"
           hx-swap="outerHTML"
-        >+30 min</button>
+        >Revert to schedule</button>
         {% endif %}
       </div>
     </li>

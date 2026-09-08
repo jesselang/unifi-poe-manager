@@ -8,7 +8,7 @@ from datetime import datetime
 from aiounifi.controller import Controller
 from aiounifi.models.device import DeviceSetPoePortModeRequest
 
-from .snooze import Override, effective_mode
+from .override import Override, effective_mode
 
 log = logging.getLogger(__name__)
 
