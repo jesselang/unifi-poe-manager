@@ -1,23 +1,34 @@
 # unifi-poe-manager
 
 Turns PoE on specific UniFi switch ports off overnight and back on in the
-morning, on a schedule. No web UI yet — this is the MVP: scheduler only.
+morning, on a schedule, with a LAN-only web UI for manual overrides (snooze,
+turn on/off now — globally or per port).
 
-See [PROJECT.md](PROJECT.md) for the full design (including the planned
-FastAPI snooze UI, not yet built).
+See [PROJECT.md](PROJECT.md) for the original design notes.
 
 ## How it works
 
 - `discover.py` — run once, interactively, to find your switch's device MAC
   and confirm port numbers/names. Prompts for controller host/port/site and
   credentials; nothing is hardcoded or written to disk.
-- `src/unifi_poe_manager/cli.py` — the headless scheduler entrypoint (no web
-  UI). Reads `config.toml`, schedules a reconcile job (via APScheduler) for
-  every distinct off/on time across all ports, and on each firing recomputes
-  every port's desired PoE mode from wall-clock time and pushes it via
-  `aiounifi`. `config.py` holds the pure config/schedule logic and `poe.py`
-  the controller-facing reconcile logic, both shared with the planned
-  FastAPI app.
+- `src/unifi_poe_manager/` — the app, as a package:
+  - `config.py` — pure config/credential loading and the port-schedule logic
+    (`desired_mode`, `port_schedule`, `trigger_times`).
+  - `snooze.py` — `effective_mode()`, the pure logic for a manual override
+    (force a port on or off until a deadline, otherwise defer to the normal
+    schedule).
+  - `poe.py` — `reconcile()`, the controller-facing logic that sets every
+    configured port to its current desired/overridden mode via `aiounifi`.
+  - `scheduler.py` — `PoeScheduler`, the shared APScheduler instance + a
+    long-lived, already-logged-in controller session. Owns the cron jobs
+    (one per distinct off/on time) and the snooze/turn-on-now/turn-off-now
+    machinery, both globally and per port — see the module docstring for how
+    overrides are represented as scheduler jobs with no separate state.
+  - `app.py` — the FastAPI app: an htmx-driven web page (`templates/`) plus
+    the same actions as a plain JSON API, sharing one `PoeScheduler` via the
+    app's lifespan. No authentication — the LAN is the trust boundary.
+  - `cli.py` — the entrypoint. Runs the full app (web UI + scheduler) by
+    default; `--no-web` runs just the scheduler, headless.
 - `config.toml` — non-secret config: controller host/port/site, switch MAC,
   port list, schedule. Copy `config.example.toml` to create it. Gitignored
   for convenience, but holds no secret — safe to manage in Nix (see
@@ -86,6 +97,20 @@ cp .env.example .env   # then fill in the two values
 nix develop --command python3 -m unifi_poe_manager.cli
 ```
 
+By default this starts the web UI (bound to `0.0.0.0:8000`, i.e. reachable
+from other devices on the LAN, not just localhost — override with
+`--host`/`--port`) alongside the scheduler, sharing one controller login.
+Open `http://<this-machine>:8000/` for the status page, or use the JSON API
+directly (`GET /status`, `POST /snooze` `{"minutes": 30|60|120}`,
+`POST /on`, `POST /off`, and the per-port equivalents at
+`/ports/{mac}/{idx}/...`).
+
+Pass `--no-web` to run just the scheduler, headless, with no HTTP server:
+
+```
+nix develop --command python3 -m unifi_poe_manager.cli --no-web
+```
+
 `.env` is gitignored. Exported environment variables still work too (and
 take precedence over `.env`, matching how systemd's `EnvironmentFile=` works
 in production — see Deploying below):
@@ -105,11 +130,13 @@ UNIFI_POE_MANAGER_CONFIG=/path/to/config.toml python3 -m unifi_poe_manager.cli
 `UNIFI_CONTROLLER_USERNAME`/`UNIFI_CONTROLLER_PASSWORD` are required — the process
 exits immediately with a clear error if either is missing.
 
-It logs the scheduled reconcile times on startup, immediately reconciles
-state once (so a restart mid-window corrects itself), then logs each time it
-fires thereafter. Ctrl+C shuts it down cleanly. The APScheduler job store
-lives in a temp directory (not persisted — jobs are just recreated from
-`config.toml` on every start).
+Either way, it logs the scheduled reconcile times on startup, immediately
+reconciles state once (so a restart mid-window corrects itself), then logs
+each time it fires thereafter, plus whenever a manual override is set via
+the web UI/API. Ctrl+C shuts it down cleanly. The APScheduler job store
+lives in a temp directory (not persisted — jobs, including any active
+snooze/override, are just recreated from `config.toml` on every start, so a
+restart always drops back to the plain schedule).
 
 ## Running the built package
 
@@ -130,19 +157,31 @@ have `nix build` available elsewhere.
 
 ## Testing
 
-The scheduling logic (`desired_mode`, `port_schedule`, `trigger_times` in
-`src/unifi_poe_manager/config.py`) and the controller-facing reconcile logic
-(`src/unifi_poe_manager/poe.py`, against a fake controller) are unit-tested
-in `tests/`:
+Unit-tested in `tests/`, all without a real controller or network:
+
+- `config.py`'s pure schedule logic and `snooze.py`'s override logic
+  (`effective_mode`).
+- `poe.py`'s `reconcile()` against a fake `aiounifi` controller.
+- `scheduler.py`'s `PoeScheduler` (snooze, turn-on/off-now, global vs.
+  per-port override precedence) against a real in-memory `AsyncIOScheduler`
+  and a fake controller, with an injectable clock so time-window assertions
+  aren't at the mercy of when the suite happens to run.
+- `app.py`'s routes via FastAPI's `TestClient`, with the scheduler dependency
+  swapped for a stub — covers request validation, JSON-vs-htmx-fragment
+  content negotiation, and 404s, not real scheduling behavior (that's
+  `test_scheduler.py`'s job).
 
 ```
 nix develop --command pytest
 ```
 
-There's no automated coverage of the `aiounifi`/controller calls — those are
-exercised by the manual verification steps below, against a real controller.
+There's no automated coverage of real `aiounifi`/controller network calls —
+those are exercised by the manual verification steps below, against a real
+controller.
 
 ## Verifying it works
+
+Scheduled behavior:
 
 1. Temporarily set `off_hour`/`off_minute` (or `on_hour`/`on_minute`) in
    `config.toml` to a couple of minutes from now.
@@ -150,6 +189,15 @@ exercised by the manual verification steps below, against a real controller.
    port ... to poe=..." log line at that time.
 3. Confirm in the UniFi UI that the port's PoE state actually changed.
 4. Restore the real schedule times.
+
+Web UI:
+
+1. Run the CLI without `--no-web` and open `http://<host>:8000/`.
+2. Press a snooze/turn-on/turn-off button (global or per-port) and confirm
+   the page updates in place (no full reload) and the log shows the
+   corresponding "Set port ... to poe=..." line.
+3. Confirm the UniFi UI reflects the change, and that the page's "Next
+   scheduled change" / override badge match what you expect.
 
 ## Deploying (NixOS)
 
@@ -202,6 +250,15 @@ already using one of those for other declarative secrets.
 
 (The `unifi-poe-manager` system user/group are created automatically by the
 module.)
+
+**Note:** the service now runs the web UI by default (bound to
+`0.0.0.0:8000`), not just the headless scheduler. The NixOS module doesn't
+yet expose a way to pass `--no-web`/`--host`/`--port` or open the firewall
+port — for now, open it yourself if you want LAN access:
+```nix
+networking.firewall.allowedTCPPorts = [ 8000 ];
+```
+or add `ExecStart` flags / a module option if you'd rather not expose it.
 
 ## Deploying to a non-Nix target
 
@@ -257,11 +314,15 @@ since `aiohttp` ships manylinux wheels — no compiler needed.
 
 ## Known limitations
 
-- No web UI or snooze override yet (see PROJECT.md for the planned design).
-- Password-based auth only — no support for UniFi's token-based Integration
-  API.
+- No authentication on the web UI/API — anyone on the LAN can snooze or
+  toggle ports. Acceptable for a home network; don't expose port 8000
+  beyond it.
+- Password-based auth only against the controller — no support for UniFi's
+  token-based Integration API.
 - All ports on the same switch must be listed together in `config.toml`;
   `poe.py`'s `reconcile()` batches them into a single API request per device (a
   UniFi/aiounifi quirk: setting one port's PoE mode overwrites the whole
   device's port-override list, so per-port requests would clobber each
   other).
+- Any active snooze/override is dropped on restart — it lives only in the
+  in-memory-for-this-run job store, not `config.toml`.

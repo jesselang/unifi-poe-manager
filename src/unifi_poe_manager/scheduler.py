@@ -24,18 +24,15 @@ would have done anyway.
 
 import asyncio
 import logging
-import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
 import aiohttp
 from aiounifi.controller import Controller
 from aiounifi.models.configuration import Configuration
-from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
@@ -280,9 +277,13 @@ async def build_scheduler(cfg: dict, username: str, password: str) -> PoeSchedul
         raise
 
     tz = ZoneInfo(cfg["schedule"]["timezone"])
-    db_path = Path(tempfile.mkdtemp(prefix="unifi-poe-manager-")) / "unifi_poe_manager.db"
-    jobstores = {"default": SQLAlchemyJobStore(url=f"sqlite:///{db_path}")}
-    aps = AsyncIOScheduler(jobstores=jobstores, timezone=tz)
+    # Default (in-memory) job store — jobs are cron-registered fresh from
+    # config.toml on every start anyway (see module docstring: no override
+    # survives a restart), and the jobs here aren't picklable regardless:
+    # each is a bound method on this PoeScheduler, which holds the live
+    # controller/session/lock. A persistent (e.g. SQLAlchemy) job store
+    # would try to pickle that on every add_job() and fail.
+    aps = AsyncIOScheduler(timezone=tz)
 
     sched = PoeScheduler(cfg=cfg, ctrl=ctrl, scheduler=aps, tz=tz, session=session)
     sched.register_jobs()

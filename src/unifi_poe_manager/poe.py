@@ -4,11 +4,8 @@ schedule-derived desired state."""
 import logging
 from collections.abc import Callable
 from datetime import datetime
-from zoneinfo import ZoneInfo
 
-import aiohttp
 from aiounifi.controller import Controller
-from aiounifi.models.configuration import Configuration
 from aiounifi.models.device import DeviceSetPoePortModeRequest
 
 from .snooze import Override, effective_mode
@@ -55,23 +52,3 @@ async def reconcile(
         await ctrl.request(request)
         for idx, mode in targets:
             log.info(f"Set port {idx} on {mac} to poe={mode}")
-
-
-async def run_reconcile(cfg: dict, username: str, password: str) -> None:
-    """Log in to the controller, refresh its device list, and reconcile."""
-    now = datetime.now(tz=ZoneInfo(cfg["schedule"]["timezone"]))
-
-    async with aiohttp.ClientSession() as session:
-        config = Configuration(
-            session,
-            cfg["controller"]["host"],
-            username=username,
-            password=password,
-            port=cfg["controller"]["port"],
-            site=cfg["controller"]["site"],
-            ssl_context=False,
-        )
-        ctrl = Controller(config)
-        await ctrl.login()
-        await ctrl.devices.update()
-        await reconcile(ctrl, cfg, now)

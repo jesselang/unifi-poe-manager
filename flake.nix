@@ -24,6 +24,12 @@
       in {
         devShells.default = pkgs.mkShell {
           packages = [ devPythonEnv pkgs.sqlite ];
+          # So `python3 -m unifi_poe_manager...` and pytest resolve the
+          # package from source without an editable pip install — `-m`
+          # only adds the current working directory to sys.path, not src/.
+          shellHook = ''
+            export PYTHONPATH="$PWD/src''${PYTHONPATH:+:$PYTHONPATH}"
+          '';
         };
 
         packages.default = pkgs.stdenv.mkDerivation {
