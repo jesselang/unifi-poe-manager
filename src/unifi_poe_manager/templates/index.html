@@ -15,22 +15,42 @@
       padding: 1rem;
     }
     h1 { font-size: 1.25rem; }
-    h2 { font-size: 1rem; margin: 0 0 0.5rem; }
-    ul.ports { list-style: none; padding: 0; margin: 0; }
-    .scope {
+    .scope.site {
       margin: 1rem 0;
       padding: 0.75rem;
       border: 1px solid currentColor;
       border-radius: 0.5rem;
     }
-    .port-name { font-weight: bold; }
-    .port-sub { display: block; font-size: 0.75rem; opacity: 0.6; }
-    .state-line {
+    .ports-toggle { margin-top: 1rem; }
+    .ports-toggle > summary { cursor: pointer; font-weight: bold; }
+    .ports-toggle > summary::marker { font-size: 0.8em; }
+    .ports-toggle > hr {
+      border: none;
+      border-top: 1px solid currentColor;
+      opacity: 0.3;
+      margin: 0.75rem 0;
+    }
+    .ports-toggle ul.ports { margin-top: 0.75rem; }
+    ul.ports { list-style: none; padding: 0; margin: 0; }
+    .port-row {
+      padding: 0.75rem 0 0;
+      border-top: 1px solid currentColor;
+    }
+    .port-row:first-child { border-top: none; padding-top: 0; }
+    .port-row:not(:last-child) { padding-bottom: 0.75rem; }
+    .summary-row {
       display: flex;
       align-items: center;
-      gap: 0.4rem;
-      margin: 0.4rem 0;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
     }
+    .scope-name { font-weight: bold; }
+    .next-state {
+      margin-left: auto;
+      text-align: right;
+      font-size: 0.85rem;
+    }
+    .port-sub { display: block; font-size: 0.75rem; opacity: 0.6; margin-bottom: 0.5rem; }
     .state-dot {
       width: 0.6rem;
       height: 0.6rem;
@@ -79,5 +99,23 @@
 <body>
   <h1>UniFi PoE Manager</h1>
   {% include "_status.html" %}
+  <script>
+    // #status is fully replaced (outerHTML) on every action and on every
+    // 60s poll, which would otherwise silently re-collapse the "Ports"
+    // disclosure whenever a viewer had manually opened it. Preserve just
+    // that one bit of UI state across swaps.
+    (function () {
+      var portsOpen = null;
+      document.body.addEventListener("htmx:beforeSwap", function () {
+        var toggle = document.querySelector("#status .ports-toggle");
+        portsOpen = toggle ? toggle.open : null;
+      });
+      document.body.addEventListener("htmx:afterSwap", function () {
+        if (portsOpen === null) return;
+        var toggle = document.querySelector("#status .ports-toggle");
+        if (toggle) toggle.open = portsOpen;
+      });
+    })();
+  </script>
 </body>
 </html>

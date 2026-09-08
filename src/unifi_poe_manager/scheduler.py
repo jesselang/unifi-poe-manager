@@ -73,9 +73,25 @@ class PoeScheduler:
     # keyed by (mac, idx) — so status() can show a human-friendly name
     # without a network call of its own.
     port_names: dict[tuple[str, int], str] = field(default_factory=dict)
+    # The configured site's friendly name (Site.description), cached once
+    # at startup (see _refresh_site_name) since it essentially never
+    # changes — unlike port names, not worth a network call every
+    # reconcile.
+    site_name: str | None = None
 
     def _now(self) -> datetime:
         return self.clock() if self.clock is not None else datetime.now(tz=self.tz)
+
+    async def _refresh_site_name(self) -> None:
+        """Look up the configured site's friendly name (Site.description)
+        from the controller — config.toml only has the short site id
+        (Site.name), which isn't what's shown in the UniFi UI."""
+        await self.ctrl.sites.update()
+        site_id = self.cfg["controller"]["site"]
+        for site in self.ctrl.sites.values():
+            if site.name == site_id:
+                self.site_name = site.description
+                break
 
     def _refresh_port_names(self) -> None:
         """Update the cached UniFi-side name for every configured port from
@@ -354,6 +370,7 @@ class PoeScheduler:
             )
         return {
             "now": now.isoformat(),
+            "site_name": self.site_name,
             "override_active": global_active,
             "override_until": global_until.isoformat() if global_until else None,
             "override_mode": global_forced,
@@ -393,6 +410,7 @@ async def build_scheduler(cfg: dict, username: str, password: str) -> PoeSchedul
     aps = AsyncIOScheduler(timezone=tz)
 
     sched = PoeScheduler(cfg=cfg, ctrl=ctrl, scheduler=aps, tz=tz, session=session)
+    await sched._refresh_site_name()
     sched.register_jobs()
     aps.start()
 

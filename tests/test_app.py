@@ -14,8 +14,10 @@ def test_time_remaining_formats_hours_and_minutes():
 def test_time_remaining_clamps_past_times_to_zero():
     assert _time_remaining("2026-09-07T11:00:00+00:00", "2026-09-07T12:00:00+00:00") == "0m"
 
+
 SAMPLE_STATUS = {
     "now": "2026-09-07T12:00:00+00:00",
+    "site_name": None,
     "override_active": False,
     "override_until": None,
     "override_mode": None,
@@ -234,6 +236,7 @@ def test_clear_port_override_unknown_port_returns_404():
 
 ALL_OFF_STATUS = {
     "now": "2026-09-07T02:00:00+00:00",
+    "site_name": None,
     "override_active": False,
     "override_until": None,
     "override_mode": None,
@@ -264,6 +267,124 @@ def test_index_renders_html_page():
         assert "text/html" in resp.headers["content-type"]
         assert "UniFi PoE Manager" in resp.text
         assert "aa:aa" in resp.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_index_shows_site_name_when_known():
+    status_with_site = {**SAMPLE_STATUS, "site_name": "Home"}
+    stub = StubScheduler(status_value=status_with_site)
+    try:
+        resp = client_for(stub).get("/")
+        assert '<span class="scope-name">Home</span>' in resp.text
+        assert "All ports" not in resp.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_index_falls_back_to_all_ports_when_site_name_unknown():
+    stub = StubScheduler(status_value=SAMPLE_STATUS)  # site_name: None
+    try:
+        resp = client_for(stub).get("/")
+        assert '<span class="scope-name">All ports</span>' in resp.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_ports_collapsed_by_default_when_no_port_override_active():
+    stub = StubScheduler(status_value=SAMPLE_STATUS)  # no override anywhere
+    try:
+        resp = client_for(stub).get("/")
+        assert '<details class="ports-toggle">' in resp.text
+        assert '<details class="ports-toggle" open>' not in resp.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_ports_expanded_when_a_port_has_its_own_override():
+    stub = StubScheduler(status_value=OVERRIDDEN_OFF_STATUS)
+    try:
+        resp = client_for(stub).get("/")
+        assert '<details class="ports-toggle" open>' in resp.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_ports_not_expanded_by_global_override_alone():
+    # only a port's own override should auto-expand the ports section; a
+    # global override by itself must not.
+    status_with_global_override = {
+        **SAMPLE_STATUS,
+        "override_active": True,
+        "override_until": "2026-09-07T13:00:00+00:00",
+        "override_mode": "on",
+    }
+    stub = StubScheduler(status_value=status_with_global_override)
+    try:
+        resp = client_for(stub).get("/")
+        assert '<details class="ports-toggle">' in resp.text
+        assert '<details class="ports-toggle" open>' not in resp.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_site_controls_always_visible_outside_the_ports_collapse():
+    # the site's turn on/off/duration controls must not be inside the
+    # collapsible <details> — only the ports list is collapsible.
+    stub = StubScheduler(status_value=SAMPLE_STATUS)
+    try:
+        resp = client_for(stub).get("/")
+        controls_pos = resp.text.index('hx-post="/off"')
+        details_pos = resp.text.index('<details class="ports-toggle"')
+        assert controls_pos < details_pos
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_ports_toggle_titled_ports():
+    stub = StubScheduler(status_value=SAMPLE_STATUS)
+    try:
+        resp = client_for(stub).get("/")
+        assert "<summary>Ports</summary>" in resp.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_ports_toggle_has_separator_before_the_list():
+    stub = StubScheduler(status_value=SAMPLE_STATUS)
+    try:
+        resp = client_for(stub).get("/")
+        summary_pos = resp.text.index("<summary>Ports</summary>")
+        hr_pos = resp.text.index("<hr>")
+        ports_pos = resp.text.index('<ul class="ports">')
+        assert summary_pos < hr_pos < ports_pos
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_index_preserves_ports_toggle_state_across_htmx_swaps():
+    # #status is fully replaced on every action/poll, which would silently
+    # re-collapse a viewer's manually opened "Ports" section — the page
+    # must include a small script that carries that bit of state across
+    # each htmx swap.
+    stub = StubScheduler(status_value=SAMPLE_STATUS)
+    try:
+        resp = client_for(stub).get("/")
+        assert "htmx:beforeSwap" in resp.text
+        assert "htmx:afterSwap" in resp.text
+        assert ".ports-toggle" in resp.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_ports_are_nested_inside_the_ports_toggle_details():
+    stub = StubScheduler(status_value=SAMPLE_STATUS)
+    try:
+        resp = client_for(stub).get("/")
+        details_start = resp.text.index('<details class="ports-toggle"')
+        details_end = resp.text.index("</details>")
+        ports_start = resp.text.index('<ul class="ports">')
+        assert details_start < ports_start < details_end
     finally:
         app.dependency_overrides.clear()
 
@@ -307,7 +428,7 @@ def test_index_falls_back_to_mac_and_port_when_unnamed():
     stub = StubScheduler(status_value=ALL_OFF_STATUS)  # name: None
     try:
         resp = client_for(stub).get("/")
-        assert '<span class="port-name">aa:aa · port 4</span>' in resp.text
+        assert '<span class="scope-name">aa:aa · port 4</span>' in resp.text
     finally:
         app.dependency_overrides.clear()
 
@@ -330,8 +451,9 @@ def test_index_shows_on_state_and_turn_off_when_a_port_is_on():
     stub = StubScheduler(status_value=SAMPLE_STATUS)
     try:
         resp = client_for(stub).get("/")
-        assert "ON" in resp.text
-        assert "next OFF at 23:59" in resp.text
+        assert 'state-dot on"' in resp.text
+        assert "OFF at 23:59" in resp.text
+        assert "next OFF" not in resp.text
         assert "(11h 59m)" in resp.text  # 12:00 -> 23:59
         assert ">Turn off<" in resp.text
         assert ">Turn on<" not in resp.text
@@ -349,8 +471,9 @@ def test_index_shows_off_state_and_turn_on_when_all_ports_off():
     stub = StubScheduler(status_value=ALL_OFF_STATUS)
     try:
         resp = client_for(stub).get("/")
-        assert "OFF" in resp.text
-        assert "next ON at 06:00" in resp.text
+        assert 'state-dot off"' in resp.text
+        assert "ON at 06:00" in resp.text
+        assert "next ON" not in resp.text
         assert "(4h)" in resp.text  # 02:00 -> 06:00, whole hours only
         assert ">Turn on<" in resp.text
         assert ">Turn off<" not in resp.text
@@ -364,6 +487,7 @@ def test_index_shows_off_state_and_turn_on_when_all_ports_off():
 
 OVERRIDDEN_OFF_STATUS = {
     "now": "2026-09-07T12:00:00+00:00",
+    "site_name": None,
     "override_active": False,
     "override_until": None,
     "override_mode": None,

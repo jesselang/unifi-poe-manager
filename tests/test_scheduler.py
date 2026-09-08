@@ -39,9 +39,26 @@ class FakeDevices:
         self.update_calls += 1
 
 
+def make_site(name: str, description: str) -> SimpleNamespace:
+    return SimpleNamespace(name=name, description=description)
+
+
+@dataclass
+class FakeSites:
+    sites: list
+    update_calls: int = 0
+
+    def values(self):
+        return self.sites
+
+    async def update(self):
+        self.update_calls += 1
+
+
 @dataclass
 class FakeController:
     devices: FakeDevices
+    sites: FakeSites = field(default_factory=lambda: FakeSites([make_site("default", "Home")]))
     requests: list = field(default_factory=list)
 
     async def request(self, request):
@@ -133,6 +150,33 @@ def test_status_shows_cached_port_name():
         unnamed = next(p for p in status["ports"] if p["port_idx"] == 20)
         assert named["name"] == "Living Room AP"
         assert unnamed["name"] is None
+        sched.scheduler.shutdown()
+
+    asyncio.run(run())
+
+
+def test_refresh_site_name_matches_configured_site():
+    cfg = cfg_with_ports({"device_mac": MAC, "port_idx": 4, "on_mode": "auto"})
+    cfg["controller"] = {"site": "default"}
+
+    async def run():
+        sched = make_poe_scheduler(cfg)
+        await sched._refresh_site_name()
+        assert sched.site_name == "Home"
+        assert sched.status()["site_name"] == "Home"
+        sched.scheduler.shutdown()
+
+    asyncio.run(run())
+
+
+def test_site_name_stays_none_when_no_site_matches():
+    cfg = cfg_with_ports({"device_mac": MAC, "port_idx": 4, "on_mode": "auto"})
+    cfg["controller"] = {"site": "nonexistent"}
+
+    async def run():
+        sched = make_poe_scheduler(cfg)
+        await sched._refresh_site_name()
+        assert sched.site_name is None
         sched.scheduler.shutdown()
 
     asyncio.run(run())
