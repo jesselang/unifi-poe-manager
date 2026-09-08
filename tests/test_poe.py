@@ -78,3 +78,38 @@ def test_reconcile_uses_off_mode_during_off_window():
     asyncio.run(reconcile(ctrl, cfg, midnight))
 
     assert ctrl.requests[0].data["port_overrides"] == [{"port_idx": 4, "poe_mode": "off"}]
+
+
+def test_reconcile_resolves_override_per_port():
+    mac = "dd:dd"
+    ctrl = FakeController(FakeDevices({mac: make_device(mac)}))
+    cfg = cfg_with_ports(
+        {"device_mac": mac, "port_idx": 4, "on_mode": "auto"},
+        {"device_mac": mac, "port_idx": 9, "on_mode": "pasv24"},
+    )
+    midnight = datetime(2026, 9, 7, 0, 0)  # normally off for both ports
+
+    def get_override(port_cfg):
+        # only port 4 is forced on; port 9 follows its normal schedule
+        return (datetime(2026, 9, 7, 1, 0), "on") if port_cfg["port_idx"] == 4 else None
+
+    asyncio.run(reconcile(ctrl, cfg, midnight, get_override))
+
+    assert ctrl.requests[0].data["port_overrides"] == [
+        {"port_idx": 4, "poe_mode": "auto"},
+        {"port_idx": 9, "poe_mode": "off"},
+    ]
+
+
+def test_reconcile_forces_off_via_override():
+    mac = "ee:ee"
+    ctrl = FakeController(FakeDevices({mac: make_device(mac)}))
+    cfg = cfg_with_ports({"device_mac": mac, "port_idx": 4, "on_mode": "pasv24"})
+    noon = datetime(2026, 9, 7, 12, 0)  # normally on
+
+    def get_override(port_cfg):
+        return datetime(2026, 9, 7, 13, 0), "off"
+
+    asyncio.run(reconcile(ctrl, cfg, noon, get_override))
+
+    assert ctrl.requests[0].data["port_overrides"] == [{"port_idx": 4, "poe_mode": "off"}]
