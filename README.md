@@ -4,7 +4,8 @@ Turns PoE on specific UniFi switch ports off overnight and back on in the
 morning, on a schedule, with a LAN-only web UI for manual overrides (turn
 on/off now, or on for a set duration — globally or per port).
 
-See [PROJECT.md](PROJECT.md) for the original design notes.
+See [PROJECT.md](PROJECT.md) for the original design notes, and
+[DECISIONS.md](DECISIONS.md) for a log of what changed since then and why.
 
 ## How it works
 

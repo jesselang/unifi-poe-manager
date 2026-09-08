@@ -35,7 +35,21 @@ def _hhmm(value: str | None) -> str:
     return datetime.fromisoformat(value).strftime("%H:%M")
 
 
+def _time_remaining(target: str, now: str) -> str:
+    """(target ISO datetime, now ISO datetime) -> "Xm"/"Xh Ym" until
+    target, for the muted countdown shown after an absolute time."""
+    minutes = round((datetime.fromisoformat(target) - datetime.fromisoformat(now)).total_seconds() / 60)
+    minutes = max(minutes, 0)
+    hours, minutes = divmod(minutes, 60)
+    if hours and minutes:
+        return f"{hours}h {minutes}m"
+    if hours:
+        return f"{hours}h"
+    return f"{minutes}m"
+
+
 TEMPLATES.env.filters["hhmm"] = _hhmm
+TEMPLATES.env.filters["time_remaining"] = _time_remaining
 
 
 @asynccontextmanager

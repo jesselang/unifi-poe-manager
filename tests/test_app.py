@@ -1,6 +1,18 @@
 from fastapi.testclient import TestClient
 
-from unifi_poe_manager.app import app, get_scheduler
+from unifi_poe_manager.app import _time_remaining, app, get_scheduler
+
+
+def test_time_remaining_formats_hours_and_minutes():
+    assert _time_remaining("2026-09-07T14:00:00+00:00", "2026-09-07T12:00:00+00:00") == "2h"
+    assert _time_remaining("2026-09-07T12:29:00+00:00", "2026-09-07T12:00:00+00:00") == "29m"
+    assert (
+        _time_remaining("2026-09-07T14:15:00+00:00", "2026-09-07T12:00:00+00:00") == "2h 15m"
+    )
+
+
+def test_time_remaining_clamps_past_times_to_zero():
+    assert _time_remaining("2026-09-07T11:00:00+00:00", "2026-09-07T12:00:00+00:00") == "0m"
 
 SAMPLE_STATUS = {
     "now": "2026-09-07T12:00:00+00:00",
@@ -320,6 +332,7 @@ def test_index_shows_on_state_and_turn_off_when_a_port_is_on():
         resp = client_for(stub).get("/")
         assert "ON" in resp.text
         assert "next OFF at 23:59" in resp.text
+        assert "(11h 59m)" in resp.text  # 12:00 -> 23:59
         assert ">Turn off<" in resp.text
         assert ">Turn on<" not in resp.text
         assert ">30m<" in resp.text
@@ -338,6 +351,7 @@ def test_index_shows_off_state_and_turn_on_when_all_ports_off():
         resp = client_for(stub).get("/")
         assert "OFF" in resp.text
         assert "next ON at 06:00" in resp.text
+        assert "(4h)" in resp.text  # 02:00 -> 06:00, whole hours only
         assert ">Turn on<" in resp.text
         assert ">Turn off<" not in resp.text
         assert ">30m<" in resp.text
@@ -381,6 +395,7 @@ def test_index_shows_manually_set_wording_and_no_next_prediction_when_overridden
         resp = client_for(stub).get("/")
         port_html = resp.text.split('<ul class="ports">')[1]
         assert "manually set until 14:00" in port_html
+        assert "(2h)" in port_html  # now=12:00, override_until=14:00
         assert "next ON" not in port_html
         assert "forced" not in resp.text
     finally:
