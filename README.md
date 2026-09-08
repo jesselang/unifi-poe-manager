@@ -11,15 +11,18 @@ FastAPI snooze UI, not yet built).
 - `discover.py` — run once, interactively, to find your switch's device MAC
   and confirm port numbers/names. Prompts for controller host/port/site and
   credentials; nothing is hardcoded or written to disk.
-- `minimal.py` — the scheduler. Reads `config.toml`, schedules a reconcile
-  job (via APScheduler) for every distinct off/on time across all ports, and
-  on each firing recomputes every port's desired PoE mode from wall-clock
-  time and pushes it via `aiounifi`.
+- `src/unifi_poe_manager/cli.py` — the headless scheduler entrypoint (no web
+  UI). Reads `config.toml`, schedules a reconcile job (via APScheduler) for
+  every distinct off/on time across all ports, and on each firing recomputes
+  every port's desired PoE mode from wall-clock time and pushes it via
+  `aiounifi`. `config.py` holds the pure config/schedule logic and `poe.py`
+  the controller-facing reconcile logic, both shared with the planned
+  FastAPI app.
 - `config.toml` — non-secret config: controller host/port/site, switch MAC,
   port list, schedule. Copy `config.example.toml` to create it. Gitignored
   for convenience, but holds no secret — safe to manage in Nix (see
   Deploying below).
-- Credentials are **never read from `config.toml`** — `minimal.py` reads
+- Credentials are **never read from `config.toml`** — `config.py` reads
   `UNIFI_CONTROLLER_USERNAME`/`UNIFI_CONTROLLER_PASSWORD` from the environment
   only, and exits immediately if they're unset.
 - `flake.nix` — Nix dev shell, a `packages.default` build of the app, and a
@@ -75,12 +78,12 @@ FastAPI snooze UI, not yet built).
 
 ## Running
 
-`minimal.py` loads a `.env` file automatically (via `python-dotenv`), so for
+The CLI loads a `.env` file automatically (via `python-dotenv`), so for
 local dev just create one:
 
 ```
 cp .env.example .env   # then fill in the two values
-nix develop --command python3 minimal.py
+nix develop --command python3 -m unifi_poe_manager.cli
 ```
 
 `.env` is gitignored. Exported environment variables still work too (and
@@ -90,13 +93,13 @@ in production — see Deploying below):
 ```
 export UNIFI_CONTROLLER_USERNAME=poe-manager
 export UNIFI_CONTROLLER_PASSWORD=...
-nix develop --command python3 minimal.py
+nix develop --command python3 -m unifi_poe_manager.cli
 ```
 
 Or point at a config file elsewhere via `UNIFI_POE_MANAGER_CONFIG`:
 
 ```
-UNIFI_POE_MANAGER_CONFIG=/path/to/config.toml python3 minimal.py
+UNIFI_POE_MANAGER_CONFIG=/path/to/config.toml python3 -m unifi_poe_manager.cli
 ```
 
 `UNIFI_CONTROLLER_USERNAME`/`UNIFI_CONTROLLER_PASSWORD` are required — the process
@@ -110,7 +113,7 @@ lives in a temp directory (not persisted — jobs are just recreated from
 
 ## Running the built package
 
-To test the same artifact that gets deployed (rather than running `minimal.py`
+To test the same artifact that gets deployed (rather than running the CLI
 straight from source), build it with Nix and run the result:
 
 ```
@@ -120,15 +123,17 @@ UNIFI_POE_MANAGER_CONFIG=/home/jesse/dev/unifi-poe-manager/config.toml \
   ./result/bin/unifi-poe-manager
 ```
 
-The built binary's `minimal.py` lives in the Nix store, and `python-dotenv`
-searches for `.env` starting from the current *working directory* — so the
-command must be run from (or below) the repo root, not just from a shell
-that happens to have `nix build` available elsewhere.
+The built package lives in the Nix store, and `python-dotenv` searches for
+`.env` starting from the current *working directory* — so the command must
+be run from (or below) the repo root, not just from a shell that happens to
+have `nix build` available elsewhere.
 
 ## Testing
 
 The scheduling logic (`desired_mode`, `port_schedule`, `trigger_times` in
-`minimal.py`) is pure and unit-tested in `tests/`:
+`src/unifi_poe_manager/config.py`) and the controller-facing reconcile logic
+(`src/unifi_poe_manager/poe.py`, against a fake controller) are unit-tested
+in `tests/`:
 
 ```
 nix develop --command pytest
@@ -141,8 +146,8 @@ exercised by the manual verification steps below, against a real controller.
 
 1. Temporarily set `off_hour`/`off_minute` (or `on_hour`/`on_minute`) in
    `config.toml` to a couple of minutes from now.
-2. Run `minimal.py` and watch for the "Set port ... to poe=..." log line at
-   that time.
+2. Run the CLI (`python3 -m unifi_poe_manager.cli`) and watch for the "Set
+   port ... to poe=..." log line at that time.
 3. Confirm in the UniFi UI that the port's PoE state actually changed.
 4. Restore the real schedule times.
 
@@ -204,15 +209,16 @@ Nix is only needed here to get a reproducible Python + `aiounifi` (a small,
 less-common package) install. On a regular Linux box, plain `pip` works fine
 since `aiohttp` ships manylinux wheels — no compiler needed.
 
-1. Copy `minimal.py`, `requirements.txt`, and your real `config.toml` to the
-   target machine, e.g. `/opt/unifi-poe-manager/`.
-2. Create a venv and install dependencies (needs Python 3.11+, for stdlib
+1. Copy `pyproject.toml`, `src/`, and your real `config.toml` to the target
+   machine, e.g. `/opt/unifi-poe-manager/`.
+2. Create a venv and install the package (needs Python 3.11+, for stdlib
    `tomllib`):
    ```
    cd /opt/unifi-poe-manager
    python3 -m venv venv
-   ./venv/bin/pip install -r requirements.txt
+   ./venv/bin/pip install .
    ```
+   This installs an `unifi-poe-manager` console script into `venv/bin/`.
 3. Create a credentials file (outside the app directory is fine too), a
    dedicated user, and a systemd unit:
    ```
@@ -234,7 +240,7 @@ since `aiohttp` ships manylinux wheels — no compiler needed.
    Group=unifi-poe-manager
    Environment=UNIFI_POE_MANAGER_CONFIG=/opt/unifi-poe-manager/config.toml
    EnvironmentFile=/opt/unifi-poe-manager/credentials.env
-   ExecStart=/opt/unifi-poe-manager/venv/bin/python3 /opt/unifi-poe-manager/minimal.py
+   ExecStart=/opt/unifi-poe-manager/venv/bin/unifi-poe-manager
    PrivateTmp=true
    Restart=always
    RestartSec=5s
@@ -255,7 +261,7 @@ since `aiohttp` ships manylinux wheels — no compiler needed.
 - Password-based auth only — no support for UniFi's token-based Integration
   API.
 - All ports on the same switch must be listed together in `config.toml`;
-  `minimal.py` batches them into a single API request per device (a
+  `poe.py`'s `reconcile()` batches them into a single API request per device (a
   UniFi/aiounifi quirk: setting one port's PoE mode overwrites the whole
   device's port-override list, so per-port requests would clobber each
   other).

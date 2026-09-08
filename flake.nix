@@ -33,10 +33,11 @@
           nativeBuildInputs = [ pkgs.makeWrapper ];
           dontBuild = true;
           installPhase = ''
-            mkdir -p $out/share/unifi-poe-manager $out/bin
-            cp minimal.py $out/share/unifi-poe-manager/
+            mkdir -p $out/lib $out/bin
+            cp -r src/unifi_poe_manager $out/lib/
             makeWrapper ${pythonEnv}/bin/python3 $out/bin/unifi-poe-manager \
-              --add-flags $out/share/unifi-poe-manager/minimal.py
+              --set PYTHONPATH $out/lib \
+              --add-flags "-m unifi_poe_manager.cli"
           '';
         };
       }) // {

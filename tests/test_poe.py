@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from types import SimpleNamespace
 
-from minimal import reconcile
+from unifi_poe_manager.poe import reconcile
 
 GLOBAL = {"off_hour": 23, "off_minute": 59, "on_hour": 6, "on_minute": 0}
 NOON = datetime(2026, 9, 7, 12, 0)  # inside every port's "on" window

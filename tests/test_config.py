@@ -2,7 +2,7 @@ from datetime import datetime
 
 import pytest
 
-from minimal import desired_mode, port_schedule, trigger_times
+from unifi_poe_manager.config import desired_mode, port_schedule, trigger_times
 
 GLOBAL = {"off_hour": 23, "off_minute": 59, "on_hour": 6, "on_minute": 0}
 
