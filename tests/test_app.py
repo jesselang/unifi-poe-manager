@@ -173,3 +173,90 @@ def test_turn_off_port_now_unknown_port_returns_404():
         assert resp.status_code == 404
     finally:
         app.dependency_overrides.clear()
+
+
+ALL_OFF_STATUS = {
+    "now": "2026-09-07T02:00:00+00:00",
+    "override_active": False,
+    "override_until": None,
+    "override_mode": None,
+    "next_trigger": "2026-09-07T06:00:00+00:00",
+    "ports": [
+        {
+            "device_mac": "aa:aa",
+            "port_idx": 4,
+            "mode": "off",
+            "override_active": False,
+            "override_until": None,
+            "override_mode": None,
+        }
+    ],
+}
+
+
+def test_index_renders_html_page():
+    stub = StubScheduler()
+    try:
+        resp = client_for(stub).get("/")
+        assert resp.status_code == 200
+        assert "text/html" in resp.headers["content-type"]
+        assert "UniFi PoE Manager" in resp.text
+        assert "aa:aa" in resp.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_index_shows_turn_off_when_a_port_is_on():
+    stub = StubScheduler(status_value=SAMPLE_STATUS)
+    try:
+        resp = client_for(stub).get("/")
+        assert "Turn off now" in resp.text
+        assert "Turn on now" not in resp.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_index_shows_turn_on_and_snooze_when_all_ports_off():
+    stub = StubScheduler(status_value=ALL_OFF_STATUS)
+    try:
+        resp = client_for(stub).get("/")
+        assert "Turn on now" in resp.text
+        assert "+30 min" in resp.text
+        assert "Turn off now" not in resp.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_status_with_hx_request_header_returns_html_fragment():
+    stub = StubScheduler()
+    try:
+        resp = client_for(stub).get("/status", headers={"HX-Request": "true"})
+        assert resp.status_code == 200
+        assert "text/html" in resp.headers["content-type"]
+        assert 'id="status"' in resp.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_snooze_with_hx_request_header_returns_html_fragment():
+    stub = StubScheduler()
+    try:
+        resp = client_for(stub).post(
+            "/snooze", json={"minutes": 30}, headers={"HX-Request": "true"}
+        )
+        assert resp.status_code == 200
+        assert "text/html" in resp.headers["content-type"]
+        assert stub.snoozed == [30]
+        assert 'id="status"' in resp.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_status_without_hx_request_header_returns_json():
+    stub = StubScheduler()
+    try:
+        resp = client_for(stub).get("/status")
+        assert "application/json" in resp.headers["content-type"]
+        assert resp.json() == SAMPLE_STATUS
+    finally:
+        app.dependency_overrides.clear()

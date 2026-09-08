@@ -1,0 +1,64 @@
+<section
+  id="status"
+  class="status"
+  hx-get="/status"
+  hx-trigger="every 60s"
+  hx-swap="outerHTML"
+>
+  <p class="next-trigger">Next scheduled change: {{ status.next_trigger | hhmm }}</p>
+
+  <div class="global-controls">
+    <h2>All ports</h2>
+    {% if status.override_active %}
+    <p class="override-badge">
+      Forced {{ status.override_mode }} until {{ status.override_until | hhmm }}
+    </p>
+    {% endif %}
+    {% set any_on = status.ports | selectattr("mode", "ne", "off") | list | length > 0 %}
+    {% if any_on %}
+    <button hx-post="/off" hx-target="#status" hx-swap="outerHTML">Turn off now</button>
+    {% else %}
+    <button hx-post="/on" hx-target="#status" hx-swap="outerHTML">Turn on now</button>
+    <button hx-post="/snooze" hx-vals='{"minutes": 30}' hx-target="#status" hx-swap="outerHTML">+30 min</button>
+    <button hx-post="/snooze" hx-vals='{"minutes": 60}' hx-target="#status" hx-swap="outerHTML">+1 hr</button>
+    <button hx-post="/snooze" hx-vals='{"minutes": 120}' hx-target="#status" hx-swap="outerHTML">+2 hr</button>
+    {% endif %}
+  </div>
+
+  <ul class="ports">
+    {% for port in status.ports %}
+    <li class="port {{ 'port-off' if port.mode == 'off' else 'port-on' }}">
+      <div class="port-info">
+        <span class="port-name">{{ port.device_mac }} · port {{ port.port_idx }}</span>
+        <span class="port-mode">{{ port.mode }}</span>
+        {% if port.override_active %}
+        <span class="override-badge">
+          forced {{ port.override_mode }} until {{ port.override_until | hhmm }}
+        </span>
+        {% endif %}
+      </div>
+      <div class="port-controls">
+        {% if port.mode != "off" %}
+        <button
+          hx-post="/ports/{{ port.device_mac }}/{{ port.port_idx }}/off"
+          hx-target="#status"
+          hx-swap="outerHTML"
+        >Turn off</button>
+        {% else %}
+        <button
+          hx-post="/ports/{{ port.device_mac }}/{{ port.port_idx }}/on"
+          hx-target="#status"
+          hx-swap="outerHTML"
+        >Turn on now</button>
+        <button
+          hx-post="/ports/{{ port.device_mac }}/{{ port.port_idx }}/snooze"
+          hx-vals='{"minutes": 30}'
+          hx-target="#status"
+          hx-swap="outerHTML"
+        >+30 min</button>
+        {% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+</section>

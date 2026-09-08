@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UniFi PoE Manager</title>
+  <script src="/static/htmx.min.js"></script>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 32rem;
+      margin: 0 auto;
+      padding: 1rem;
+    }
+    h1 { font-size: 1.25rem; }
+    h2 { font-size: 1rem; margin-bottom: 0.5rem; }
+    .next-trigger { opacity: 0.7; font-size: 0.9rem; }
+    .global-controls {
+      margin: 1rem 0;
+      padding: 0.75rem;
+      border: 1px solid currentColor;
+      border-radius: 0.5rem;
+    }
+    button {
+      font-size: 1rem;
+      padding: 0.6rem 1rem;
+      margin: 0.15rem;
+      border-radius: 0.4rem;
+      border: 1px solid currentColor;
+      background: transparent;
+      color: inherit;
+    }
+    ul.ports { list-style: none; padding: 0; }
+    li.port {
+      padding: 0.75rem;
+      margin-bottom: 0.5rem;
+      border: 1px solid currentColor;
+      border-radius: 0.5rem;
+    }
+    li.port-off { opacity: 0.7; }
+    .port-info { display: flex; flex-direction: column; margin-bottom: 0.5rem; }
+    .port-name { font-weight: bold; }
+    .port-mode { text-transform: uppercase; font-size: 0.85rem; }
+    .override-badge { font-size: 0.8rem; opacity: 0.8; }
+  </style>
+</head>
+<body>
+  <h1>UniFi PoE Manager</h1>
+  {% include "_status.html" %}
+</body>
+</html>
