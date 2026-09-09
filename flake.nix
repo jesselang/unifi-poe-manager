@@ -118,6 +118,32 @@
                 site = mkOption { type = types.str; default = "default"; };
               };
 
+              webEnable = mkOption {
+                type = types.bool;
+                default = true;
+                description = ''
+                  Run the web UI/API alongside the scheduler. Set to false
+                  for a headless deployment that only runs the schedule
+                  (passes --no-web; webHost/webPort are ignored).
+                '';
+              };
+
+              webHost = mkOption {
+                type = types.str;
+                default = "127.0.0.1";
+                description = ''
+                  Bind address for the web UI/API. Defaults to localhost;
+                  set to e.g. "0.0.0.0" to expose it on the LAN, or pair
+                  with a reverse proxy.
+                '';
+              };
+
+              webPort = mkOption {
+                type = types.port;
+                default = 8000;
+                description = "Bind port for the web UI/API.";
+              };
+
               schedule = {
                 offHour = mkOption { type = types.ints.between 0 23; default = 23; };
                 offMinute = mkOption { type = types.ints.between 0 59; default = 59; };
@@ -151,7 +177,10 @@
                   Group = "unifi-poe-manager";
                   PrivateTmp = true;
                   EnvironmentFile = cfg.environmentFile;
-                  ExecStart = "${self.packages.${pkgs.system}.default}/bin/unifi-poe-manager";
+                  ExecStart = "${self.packages.${pkgs.system}.default}/bin/unifi-poe-manager"
+                    + (if cfg.webEnable
+                       then " --host ${cfg.webHost} --port ${toString cfg.webPort}"
+                       else " --no-web");
                   Restart = "always";
                   RestartSec = "5s";
                 };

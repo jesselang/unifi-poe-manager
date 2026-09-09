@@ -54,7 +54,7 @@ def parse_args() -> argparse.Namespace:
         help="run the scheduler only, without the web UI/API",
     )
     parser.add_argument(
-        "--host", default="0.0.0.0", help="web UI bind host (default: 0.0.0.0)"
+        "--host", default="127.0.0.1", help="web UI bind host (default: 127.0.0.1)"
     )
     parser.add_argument(
         "--port", type=int, default=8000, help="web UI bind port (default: 8000)"

@@ -271,7 +271,19 @@ services.unifi-poe-manager = {
     { deviceMac = "aa:bb:cc:dd:ee:ff"; portIdx = 9; onMode = "pasv24";
       offHour = 22; offMinute = 0; }  # per-port schedule override
   ];
+
+  # Web UI/API, on by default — bound to localhost unless told otherwise:
+  webEnable = true;
+  webHost   = "127.0.0.1";  # e.g. "0.0.0.0" to expose it on the LAN
+  webPort   = 8000;
 };
+```
+
+`webEnable = false` runs the headless scheduler only (passes `--no-web`;
+`webHost`/`webPort` are then ignored). If you set `webHost` to something
+other than loopback, remember to open the firewall:
+```nix
+networking.firewall.allowedTCPPorts = [ 8000 ];  # match webPort
 ```
 
 The module renders these into a `config.toml` in the Nix store and points
@@ -292,15 +304,6 @@ already using one of those for other declarative secrets.
 
 (The `unifi-poe-manager` system user/group are created automatically by the
 module.)
-
-**Note:** the service now runs the web UI by default (bound to
-`0.0.0.0:8000`), not just the headless scheduler. The NixOS module doesn't
-yet expose a way to pass `--no-web`/`--host`/`--port` or open the firewall
-port — for now, open it yourself if you want LAN access:
-```nix
-networking.firewall.allowedTCPPorts = [ 8000 ];
-```
-or add `ExecStart` flags / a module option if you'd rather not expose it.
 
 ## Deploying to a non-Nix target
 

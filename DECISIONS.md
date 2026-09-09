@@ -214,3 +214,19 @@ each port's own `override_redundant`, true exactly when that scope's
 active override is the only reason its effective state differs from the
 plain schedule. The page hides the Turn on/off button and duration row in
 that case, leaving "Revert to schedule" as the one visible action.
+
+## 2026-09-08 — Web UI defaults to localhost; NixOS module gets webEnable/webHost/webPort
+
+The CLI's `--host` default was `0.0.0.0`, silently exposing the (auth-less,
+"LAN is the trust boundary") web UI on every interface unless the operator
+remembered to override it — surprising and the wrong default for a service
+whose security model assumes a deliberately chosen bind address. Changed
+the default to `127.0.0.1`; exposing it on the LAN is now an explicit
+choice via `--host`/`--port` or the new NixOS module options. The module's
+`ExecStart` previously ignored these flags entirely (always ran with the
+CLI's defaults, headless mode unreachable from Nix). Added
+`services.unifi-poe-manager.webEnable` (default `true`, passes `--no-web`
+when `false`), `webHost` (default `127.0.0.1`), and `webPort` (default
+`8000`), appended onto `ExecStart` — kept as CLI flags rather than folded
+into the generated `config.toml`, since that file is scoped to UniFi/
+schedule config and bind address is an orthogonal deployment concern.
