@@ -269,3 +269,27 @@ revert time via `_global_revert_change`/`_port_revert_change`, and
 extending an active "on" override was already additive
 (`turn_on_for`'s baseline logic) — this was purely a template bug
 hiding working functionality.
+
+## 2026-09-09 — Supersedes "`override_redundant` only gates the primary Turn on/off button, not the duration pills": the "for Xm" pills (not "extend") are hidden when redundant too
+
+Making the duration row unconditional went too far. Reported case: force a
+port off, then press "on for 30m" — the schedule is currently on, so the
+port's own inherited state (with its override cleared) is already on,
+i.e. `override_redundant` is true for the resulting override. The 30m
+pill doesn't actually give a bounded 30-minute window: per
+`_port_revert_change`'s no-op fold-forward (see the 2026-09-08 "look past
+a no-op" decision above), the moment the timer lapses the schedule
+already agrees "on," so it just keeps being on until the schedule's real
+next off — which read "OFF at 23:59" on screen, many hours later, right
+next to a button labeled "30m." The button's label lied about its effect.
+
+The asymmetry is direction-dependent, not just "redundant or not":
+"extend" (shown while on) is never dishonest this way, since pushing a
+deadline out is always a real, different end time regardless of whether
+the override behind it is redundant — only "for" (shown while off) can
+silently balloon past its stated duration, and only when the schedule
+it would fall through to already agrees with the direction being
+requested. So the duration row is now hidden exactly when the primary
+button is (`not override_redundant`), *unless* currently on — matching
+"extend" back to unconditional while gating "for" the same as the
+primary button. See `docs/override-state.md` §4a for the full table.

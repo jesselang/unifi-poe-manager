@@ -604,8 +604,12 @@ def test_index_hides_redundant_controls_when_override_matches_schedule():
     # site override is "on", but the schedule already agrees (see
     # override_redundant) — clicking Turn on/off again would just do what
     # "Revert to schedule" already does, so that button is hidden. The
-    # duration pills stay, though: extending by 30m/1h/2h is never
-    # redundant with reverting, since it changes *when* things revert.
+    # duration pills stay, though: since the site is currently on, they're
+    # labeled "extend" and extending by 30m/1h/2h is never redundant with
+    # reverting, since it changes *when* things revert. (Contrast the "for"
+    # pills shown while off — those DO get hidden when redundant, since a
+    # bounded on-window isn't actually bounded if the schedule already
+    # agrees; see test_index_hides_redundant_port_controls_when_override_matches_schedule.)
     status = {
         **SAMPLE_STATUS,
         "override_active": True,
@@ -628,6 +632,10 @@ def test_index_hides_redundant_controls_when_override_matches_schedule():
 
 
 def test_index_hides_redundant_port_controls_when_override_matches_schedule():
+    # port is off via its own override, but the schedule it would revert to
+    # already says on — so a "for Xm" pill wouldn't actually give a bounded
+    # Xm window (the schedule folds it straight back to "on" for the rest of
+    # the on-period): only "Revert to schedule" is an honest action here.
     status = {
         **SAMPLE_STATUS,
         "ports": [
@@ -651,6 +659,39 @@ def test_index_hides_redundant_port_controls_when_override_matches_schedule():
         resp = client_for(stub).get("/")
         port_html = resp.text.split('<ul class="ports">')[1]
         assert ">Turn on<" not in port_html
+        assert ">30m<" not in port_html
+        assert ">Revert to schedule<" in port_html
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_index_keeps_off_duration_pills_when_port_override_is_not_redundant():
+    # mirror of the above but genuinely not redundant (the schedule it would
+    # revert to is off) — here "for Xm" gives a real bounded window, so the
+    # pills (and the primary "Turn on") stay.
+    status = {
+        **SAMPLE_STATUS,
+        "ports": [
+            {
+                **SAMPLE_STATUS["ports"][0],
+                "mode": "off",
+                "override_active": True,
+                "override_until": "2026-09-07T13:00:00+00:00",
+                "override_mode": "off",
+                "effective_override_active": True,
+                "effective_override_until": "2026-09-07T13:00:00+00:00",
+                "effective_override_mode": "off",
+                "effective_override_next_change_at": "2026-09-07T13:00:00+00:00",
+                "effective_override_next_change_on": False,
+                "override_redundant": False,
+            }
+        ],
+    }
+    stub = StubScheduler(status_value=status)
+    try:
+        resp = client_for(stub).get("/")
+        port_html = resp.text.split('<ul class="ports">')[1]
+        assert ">Turn on<" in port_html
         assert ">30m<" in port_html
         assert ">Revert to schedule<" in port_html
     finally:
