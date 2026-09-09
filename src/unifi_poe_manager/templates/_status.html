@@ -13,31 +13,25 @@
       <span class="state-dot {{ 'on' if any_on else 'off' }}" aria-label="{{ 'on' if any_on else 'off' }}"></span>
       <span class="scope-name">{{ status.site_name or "All ports" }}</span>
       <span class="next-state">
-        {% if status.override_active %}
-        {{ "ON" if status.override_next_change_on else "OFF" }} at {{ status.override_next_change_at | hhmm }}
-        <span class="time-remaining">({{ status.override_next_change_at | time_remaining(status.now) }})</span>
-        {% else %}
-        {{ "OFF" if any_on else "ON" }} at {{ status.next_trigger | hhmm }}
-        <span class="time-remaining">({{ status.next_trigger | time_remaining(status.now) }})</span>
-        {% endif %}
+        {{ "ON" if status.next_change_on else "OFF" }} at {{ status.next_change_at | hhmm }}
+        <span class="time-remaining">({{ status.next_change_at | time_remaining(status.now) }})</span>
       </span>
     </div>
     <div class="scope-controls">
       {% if not status.override_redundant %}
       {% if any_on %}
       <button class="primary danger" hx-post="/off" hx-target="#status" hx-swap="outerHTML" hx-confirm="Turn off {{ status.site_name or 'all ports' }}?">Turn off</button>
-      {% set duration_label = "extend" %}
       {% else %}
       <button class="primary" hx-post="/on" hx-target="#status" hx-swap="outerHTML">Turn on</button>
-      {% set duration_label = "for" %}
       {% endif %}
+      {% endif %}
+      {% set duration_label = "extend" if any_on else "for" %}
       <span class="duration-row">
         <span class="duration-label">{{ duration_label }}</span>
         <button class="pill" hx-post="/override" hx-vals='{"minutes": 30}' hx-target="#status" hx-swap="outerHTML">30m</button>
         <button class="pill" hx-post="/override" hx-vals='{"minutes": 60}' hx-target="#status" hx-swap="outerHTML">1h</button>
         <button class="pill" hx-post="/override" hx-vals='{"minutes": 120}' hx-target="#status" hx-swap="outerHTML">2h</button>
       </span>
-      {% endif %}
       {% if status.override_active %}
       <button class="link" hx-delete="/override" hx-target="#status" hx-swap="outerHTML">Revert to schedule</button>
       {% endif %}
@@ -73,7 +67,6 @@
               hx-swap="outerHTML"
               hx-confirm="Turn off {{ port.name or (port.device_mac ~ ' port ' ~ port.port_idx) }}?"
             >Turn off</button>
-            {% set port_duration_label = "extend" %}
             {% else %}
             <button
               class="primary"
@@ -81,8 +74,9 @@
               hx-target="#status"
               hx-swap="outerHTML"
             >Turn on</button>
-            {% set port_duration_label = "for" %}
             {% endif %}
+            {% endif %}
+            {% set port_duration_label = "extend" if port_on else "for" %}
             <span class="duration-row">
               <span class="duration-label">{{ port_duration_label }}</span>
               <button
@@ -107,7 +101,6 @@
                 hx-swap="outerHTML"
               >2h</button>
             </span>
-            {% endif %}
             {% if port.override_active %}
             <button
               class="link"

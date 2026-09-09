@@ -281,6 +281,44 @@ class PoeScheduler:
         next_forced: Literal["on", "off"] = "on" if reverts_on else "off"
         return self.next_state_change_after(until, next_forced), not reverts_on
 
+    def _port_next_change(self, port_cfg: dict, now: datetime) -> tuple[datetime, bool]:
+        """The next time this specific port's effective mode actually
+        changes, and to what — accounting for whichever override (its
+        own, or one it's inheriting from the global scope) is currently
+        active. Unlike next_port_trigger_after(), a cron trigger that an
+        active override would make a no-op for this port is skipped, the
+        same way _port_revert_change() already does for a port's own
+        displayed effective_override_next_change_at."""
+        override = self._get_override(port_cfg)
+        if override is not None:
+            until, forced = override
+            return self._port_revert_change(port_cfg, until, forced)
+        at = self.next_port_trigger_after(port_cfg, now)
+        return at, desired_mode(at, port_cfg, self.cfg["schedule"]) != "off"
+
+    def _site_next_change(self, now: datetime) -> tuple[datetime, bool]:
+        """The next time any-port-on for the whole site actually
+        changes, and to what — the site-wide equivalent of
+        _port_next_change(). Unlike next_trigger_after() (just the next
+        cron trigger, regardless of whether it changes anything), this
+        accounts for each port's own override: a port with its own
+        active override (independent of any global override) can make
+        the very next cron trigger a no-op for that port, so the site's
+        real next flip may land on a different port's transition, or
+        later than the next trigger altogether — see the "Lang Home:
+        OFF at 06:00" bug where 06:00 was actually the ON trigger, only
+        labeled OFF because one port's own override was masking it."""
+        current = self._any_port_on(now)
+        candidates = sorted({self._port_next_change(p, now)[0] for p in self.cfg["ports"]})
+        for t in candidates:
+            if self._any_port_on(t) != current:
+                return t, not current
+        # Every port's own next transition is itself a no-op for the
+        # site-wide aggregate (e.g. one port's override outlasts the
+        # others' near-term transitions) — the latest of them is still a
+        # better estimate than reporting nothing.
+        return candidates[-1], not current
+
     async def _set_override(self, scope: str, until: datetime, forced: Literal["on", "off"]) -> None:
         """Force `scope` to `forced` until `until`. Cancels any existing
         override in the *other* direction for the same scope first, so a
@@ -515,6 +553,7 @@ class PoeScheduler:
             global_next_change_at, global_next_change_on = self._global_revert_change(
                 global_until, global_forced
             )
+        site_next_at, site_next_on = self._site_next_change(now)
         return {
             "now": now.isoformat(),
             "site_name": self.site_name,
@@ -535,6 +574,14 @@ class PoeScheduler:
                 global_active and self._would_already_be(now, "off" if any_on else "on")
             ),
             "next_trigger": self.next_trigger_after(now).isoformat(),
+            # the single source of truth the page displays at the site
+            # level, whether or not a global override is active — unlike
+            # next_trigger (just the next cron fire, which a port's own
+            # override can turn into a no-op) this is the next time
+            # any-port-on will actually change, and to what; see
+            # _site_next_change()
+            "next_change_at": site_next_at.isoformat(),
+            "next_change_on": site_next_on,
             "ports": ports,
         }
 

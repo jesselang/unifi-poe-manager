@@ -247,3 +247,25 @@ green/gray distinction alone isn't reliable. Base font size bumped to
 width — before settling here) via `:root { font-size }`, which scales
 every `rem`-based size in the sheet together rather than needing each
 rule bumped individually.
+
+## 2026-09-09 — `override_redundant` only gates the primary Turn on/off button, not the duration pills
+
+`status()`'s `override_redundant` flag is true whenever pressing the
+primary immediate Turn on/off button would do nothing more than
+"Revert to schedule" already does — e.g. you turn on for 30m while the
+schedule is currently off, so right now the plain schedule agrees with
+"off", making an immediate "Turn off" press redundant with reverting.
+The template used to hide the whole `scope-controls` block (primary
+button *and* duration pills) whenever this was true, which meant
+setting *any* timed override while the schedule disagreed made every
+button vanish except "Revert to schedule" — no way to see it as a
+timed window or to extend it. Extending by 30m/1h/2h is never actually
+redundant with reverting (it changes *when* things revert, which
+reverting-now doesn't), so the fix splits the two: `override_redundant`
+still hides the primary button, but the duration row renders
+unconditionally. The rest of the override state machine was already
+correct — timed overrides already computed and displayed the right
+revert time via `_global_revert_change`/`_port_revert_change`, and
+extending an active "on" override was already additive
+(`turn_on_for`'s baseline logic) — this was purely a template bug
+hiding working functionality.

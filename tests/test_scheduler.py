@@ -145,6 +145,38 @@ def test_status_reflects_override_and_ports():
     asyncio.run(run())
 
 
+def test_site_next_change_accounts_for_a_lone_port_override():
+    # Reproduces a real report: one port has its own "on" override while
+    # the other two ports just follow the plain schedule, which is
+    # currently off (05:06, between the 23:59 off and 06:00 on triggers).
+    # The site-wide "next change" line used to be computed as "OFF if
+    # any_on else ON at next_trigger" — any_on was True (thanks to the
+    # overridden port), so it showed "OFF at 06:00". But 06:00 is the ON
+    # trigger; nothing turns off then. The real next site-wide change is
+    # 23:59, when the overridden port's own override lapses *and* the
+    # other two ports' scheduled off-trigger lands at the same instant.
+    cfg = cfg_with_ports(
+        {"device_mac": MAC, "port_idx": 4, "on_mode": "auto"},
+        {"device_mac": MAC, "port_idx": 9, "on_mode": "auto"},
+        {"device_mac": MAC, "port_idx": 21, "on_mode": "auto"},
+    )
+
+    async def run():
+        now = datetime(2026, 9, 9, 5, 6, tzinfo=TZ)
+        sched = make_poe_scheduler(cfg, now=now)
+        assert sched._any_port_on(now) is False  # plain schedule: all off
+
+        await sched.turn_on_port_now(MAC, 21)
+
+        status = sched.status()
+        assert status["override_active"] is False  # no global override
+        assert status["next_change_at"] == datetime(2026, 9, 9, 23, 59, tzinfo=TZ).isoformat()
+        assert status["next_change_on"] is False
+        sched.scheduler.shutdown()
+
+    asyncio.run(run())
+
+
 def test_effective_override_next_change_reflects_schedule_at_expiry():
     # turn_off_port_now() sets the override to expire exactly at the port's
     # next scheduled trigger — here that's the (next day's) 06:00 "on"

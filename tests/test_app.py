@@ -25,6 +25,8 @@ SAMPLE_STATUS = {
     "override_next_change_on": None,
     "override_redundant": False,
     "next_trigger": "2026-09-07T23:59:00+00:00",
+    "next_change_at": "2026-09-07T23:59:00+00:00",
+    "next_change_on": False,
     "ports": [
         {
             "device_mac": "aa:aa",
@@ -250,6 +252,8 @@ ALL_OFF_STATUS = {
     "override_next_change_on": None,
     "override_redundant": False,
     "next_trigger": "2026-09-07T06:00:00+00:00",
+    "next_change_at": "2026-09-07T06:00:00+00:00",
+    "next_change_on": True,
     "ports": [
         {
             "device_mac": "aa:aa",
@@ -509,6 +513,8 @@ OVERRIDDEN_OFF_STATUS = {
     "override_next_change_on": None,
     "override_redundant": False,
     "next_trigger": "2026-09-07T23:59:00+00:00",
+    "next_change_at": "2026-09-07T14:00:00+00:00",
+    "next_change_on": True,
     "ports": [
         {
             "device_mac": "aa:aa",
@@ -596,9 +602,10 @@ def test_index_shows_next_actual_change_not_a_noop_override_expiry():
 
 def test_index_hides_redundant_controls_when_override_matches_schedule():
     # site override is "on", but the schedule already agrees (see
-    # override_redundant) — the only thing worth doing here is reverting,
-    # so the Turn on/off button and duration row shouldn't be offered
-    # alongside a "Revert to schedule" link that does the exact same thing.
+    # override_redundant) — clicking Turn on/off again would just do what
+    # "Revert to schedule" already does, so that button is hidden. The
+    # duration pills stay, though: extending by 30m/1h/2h is never
+    # redundant with reverting, since it changes *when* things revert.
     status = {
         **SAMPLE_STATUS,
         "override_active": True,
@@ -614,7 +621,7 @@ def test_index_hides_redundant_controls_when_override_matches_schedule():
         site_html = resp.text.split('<details class="ports-toggle"')[0]
         assert ">Turn off<" not in site_html
         assert ">Turn on<" not in site_html
-        assert ">30m<" not in site_html
+        assert ">30m<" in site_html
         assert ">Revert to schedule<" in site_html
     finally:
         app.dependency_overrides.clear()
@@ -644,7 +651,7 @@ def test_index_hides_redundant_port_controls_when_override_matches_schedule():
         resp = client_for(stub).get("/")
         port_html = resp.text.split('<ul class="ports">')[1]
         assert ">Turn on<" not in port_html
-        assert ">30m<" not in port_html
+        assert ">30m<" in port_html
         assert ">Revert to schedule<" in port_html
     finally:
         app.dependency_overrides.clear()
