@@ -230,3 +230,20 @@ when `false`), `webHost` (default `127.0.0.1`), and `webPort` (default
 `8000`), appended onto `ExecStart` — kept as CLI flags rather than folded
 into the generated `config.toml`, since that file is scoped to UniFi/
 schedule config and bind address is an orthogonal deployment concern.
+
+## 2026-09-09 — Confirm on "Turn off", bigger text, and a low-contrast-safe off indicator
+
+Used one-handed on a phone, "Turn off" sitting right next to "Turn on"
+and the duration pills invited a fat-fingered mispress with real
+consequences (killing PoE to a device overnight). Both "Turn off"
+buttons (site and per-port) now carry `hx-confirm` (htmx's built-in
+`window.confirm()` hook — no extra JS) and a red (`button.danger`)
+background so they read as different from the neutral buttons around
+them, not just bigger/bolder. The on/off state dot also stopped relying
+on color alone — off is now a square, on stays a circle — since the app
+is used in low-contrast conditions (bright sun, night vision) where the
+green/gray distinction alone isn't reliable. Base font size bumped to
+125% (tried 120%, then 150% — too much reflow/wrapping at ~412px mobile
+width — before settling here) via `:root { font-size }`, which scales
+every `rem`-based size in the sheet together rather than needing each
+rule bumped individually.

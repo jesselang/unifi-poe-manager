@@ -7,7 +7,7 @@
   <script src="/static/htmx.min.js"></script>
   <script src="/static/json-enc.js"></script>
   <style>
-    :root { color-scheme: light dark; }
+    :root { color-scheme: light dark; font-size: 125%; }
     body {
       font-family: system-ui, sans-serif;
       max-width: 32rem;
@@ -54,11 +54,10 @@
     .state-dot {
       width: 0.6rem;
       height: 0.6rem;
-      border-radius: 50%;
       flex: none;
     }
-    .state-dot.on { background: #2e8b57; }
-    .state-dot.off { background: #888; }
+    .state-dot.on { border-radius: 50%; background: #2e8b57; }
+    .state-dot.off { border-radius: 0; background: #888; }
     .time-remaining { opacity: 0.6; font-size: 0.85em; }
     .scope-controls {
       display: flex;
@@ -75,6 +74,11 @@
       color: inherit;
     }
     button.primary { font-weight: bold; }
+    button.danger {
+      background: #c0392b;
+      border-color: #c0392b;
+      color: #fff;
+    }
     .duration-row {
       display: flex;
       align-items: center;

@@ -25,7 +25,7 @@
     <div class="scope-controls">
       {% if not status.override_redundant %}
       {% if any_on %}
-      <button class="primary" hx-post="/off" hx-target="#status" hx-swap="outerHTML">Turn off</button>
+      <button class="primary danger" hx-post="/off" hx-target="#status" hx-swap="outerHTML" hx-confirm="Turn off {{ status.site_name or 'all ports' }}?">Turn off</button>
       {% set duration_label = "extend" %}
       {% else %}
       <button class="primary" hx-post="/on" hx-target="#status" hx-swap="outerHTML">Turn on</button>
@@ -67,10 +67,11 @@
             {% if not port.override_redundant %}
             {% if port_on %}
             <button
-              class="primary"
+              class="primary danger"
               hx-post="/ports/{{ port.device_mac }}/{{ port.port_idx }}/off"
               hx-target="#status"
               hx-swap="outerHTML"
+              hx-confirm="Turn off {{ port.name or (port.device_mac ~ ' port ' ~ port.port_idx) }}?"
             >Turn off</button>
             {% set port_duration_label = "extend" %}
             {% else %}
