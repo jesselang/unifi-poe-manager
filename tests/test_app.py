@@ -461,7 +461,7 @@ def test_index_shows_on_state_and_turn_off_when_a_port_is_on():
     # turn_on_for forces "on" for N minutes regardless of current state, so it
     # doubles as "keep it on longer" (postpone an upcoming off) — it must
     # stay visible even while already on, not just when off. Labeled
-    # "extend" (not "on for") since the port is already on.
+    # "extend" (not "for") since the port is already on.
     stub = StubScheduler(status_value=SAMPLE_STATUS)
     try:
         resp = client_for(stub).get("/")
@@ -475,7 +475,7 @@ def test_index_shows_on_state_and_turn_off_when_a_port_is_on():
         assert ">1h<" in resp.text
         assert ">2h<" in resp.text
         assert ">extend<" in resp.text
-        assert ">on for<" not in resp.text
+        assert ">for<" not in resp.text
         assert "forced" not in resp.text
     finally:
         app.dependency_overrides.clear()
@@ -492,7 +492,7 @@ def test_index_shows_off_state_and_turn_on_when_all_ports_off():
         assert ">Turn on<" in resp.text
         assert ">Turn off<" not in resp.text
         assert ">30m<" in resp.text
-        assert ">on for<" in resp.text
+        assert ">for<" in resp.text
         assert ">extend<" not in resp.text
         assert "forced" not in resp.text
     finally:

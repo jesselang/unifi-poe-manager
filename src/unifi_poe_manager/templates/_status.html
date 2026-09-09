@@ -29,7 +29,7 @@
       {% set duration_label = "extend" %}
       {% else %}
       <button class="primary" hx-post="/on" hx-target="#status" hx-swap="outerHTML">Turn on</button>
-      {% set duration_label = "on for" %}
+      {% set duration_label = "for" %}
       {% endif %}
       <span class="duration-row">
         <span class="duration-label">{{ duration_label }}</span>
@@ -80,7 +80,7 @@
               hx-target="#status"
               hx-swap="outerHTML"
             >Turn on</button>
-            {% set port_duration_label = "on for" %}
+            {% set port_duration_label = "for" %}
             {% endif %}
             <span class="duration-row">
               <span class="duration-label">{{ port_duration_label }}</span>
