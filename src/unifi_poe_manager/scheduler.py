@@ -37,7 +37,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 
-from .config import port_schedule, trigger_times
+from .config import desired_mode, port_schedule, trigger_times
 from .override import Override, effective_mode
 from .poe import reconcile
 
@@ -163,6 +163,31 @@ class PoeScheduler:
             for port_cfg in self.cfg["ports"]
         )
 
+    def _port_would_already_be(
+        self, port_cfg: dict, now: datetime, forced: Literal["on", "off"]
+    ) -> bool:
+        """Whether this port would already effectively be `forced` if its
+        own override were cleared — i.e. left to an inherited global
+        override, or the plain schedule. Used so "turn this port on/off"
+        doesn't create a redundant override on top of the port's own when
+        clearing it would land on the same result anyway (e.g. the port
+        was forced off against the schedule, the schedule has since caught
+        up to "on", and now you press "turn on" — that's just reverting)."""
+        global_active, global_until, global_forced = self.global_override_status()
+        inherited = (global_until, global_forced) if global_active else None
+        mode = effective_mode(now, inherited, port_cfg, self.cfg["schedule"])
+        return (mode != "off") == (forced == "on")
+
+    def _would_already_be(self, now: datetime, forced: Literal["on", "off"]) -> bool:
+        """Same idea as _port_would_already_be(), but for the global
+        override — whether the plain schedule alone (ignoring any active
+        override) already puts every port in the requested direction."""
+        any_on = any(
+            desired_mode(now, port_cfg, self.cfg["schedule"]) != "off"
+            for port_cfg in self.cfg["ports"]
+        )
+        return any_on == (forced == "on")
+
     async def job_reconcile(self, trigger: str) -> None:
         async with self.lock:
             now = self._now()
@@ -196,6 +221,65 @@ class PoeScheduler:
             for h, m in {(off_hour, off_minute), (on_hour, on_minute)}
         ]
         return min(candidates)
+
+    def next_port_state_change_after(
+        self, port_cfg: dict, now: datetime, forced: Literal["on", "off"]
+    ) -> datetime:
+        """The next time this port's plain schedule would actually put it in
+        a state other than `forced` — unlike next_port_trigger_after(), this
+        skips a same-effect trigger (e.g. an "off" cron firing while already
+        forced off is a no-op, so it doesn't count). Used to pick an
+        override's end time so reverting to schedule is guaranteed to
+        change something, rather than landing on a trigger that wouldn't."""
+        off_hour, off_minute, on_hour, on_minute = port_schedule(
+            port_cfg, self.cfg["schedule"]
+        )
+        hour, minute = (off_hour, off_minute) if forced == "on" else (on_hour, on_minute)
+        return CronTrigger(hour=hour, minute=minute, timezone=self.tz).get_next_fire_time(None, now)
+
+    def next_state_change_after(self, now: datetime, forced: Literal["on", "off"]) -> datetime:
+        """Same as next_port_state_change_after(), but across every
+        configured port — the earliest time any of them would actually
+        differ from `forced`. Used by the global "turn on/off now"."""
+        return min(
+            self.next_port_state_change_after(port_cfg, now, forced)
+            for port_cfg in self.cfg["ports"]
+        )
+
+    def _port_revert_change(
+        self, port_cfg: dict, until: datetime, forced: Literal["on", "off"]
+    ) -> tuple[datetime, bool]:
+        """A port forced to `forced` until `until`: when it will actually
+        change state, and to what. If the plain schedule already disagrees
+        with `forced` right at `until`, that's the answer. Otherwise
+        reverting there is a no-op (the schedule just agrees with what we
+        were already forcing), so this looks past it to the schedule's own
+        next real transition instead — same reasoning as
+        next_port_state_change_after(), just anchored at the override's end
+        rather than now."""
+        reverts_on = desired_mode(until, port_cfg, self.cfg["schedule"]) != "off"
+        if reverts_on != (forced == "on"):
+            return until, reverts_on
+        next_forced: Literal["on", "off"] = "on" if reverts_on else "off"
+        return self.next_port_state_change_after(port_cfg, until, next_forced), not reverts_on
+
+    def _global_revert_change(
+        self, until: datetime, forced: Literal["on", "off"]
+    ) -> tuple[datetime, bool]:
+        """Same as _port_revert_change(), but for the global override —
+        "on" here means at least one port would be on."""
+
+        def any_on_at(when: datetime) -> bool:
+            return any(
+                desired_mode(when, port_cfg, self.cfg["schedule"]) != "off"
+                for port_cfg in self.cfg["ports"]
+            )
+
+        reverts_on = any_on_at(until)
+        if reverts_on != (forced == "on"):
+            return until, reverts_on
+        next_forced: Literal["on", "off"] = "on" if reverts_on else "off"
+        return self.next_state_change_after(until, next_forced), not reverts_on
 
     async def _set_override(self, scope: str, until: datetime, forced: Literal["on", "off"]) -> None:
         """Force `scope` to `forced` until `until`. Cancels any existing
@@ -268,17 +352,33 @@ class PoeScheduler:
         return new_until
 
     async def turn_on_now(self) -> datetime:
-        """Force every port on until the schedule's next trigger would act
-        anyway."""
-        until = self.next_trigger_after(self._now())
-        await self._set_override(_GLOBAL_SCOPE, until, "on")
+        """Force every port on until the schedule would actually turn one
+        back off — skipping over any "on" trigger that fires in the
+        meantime, since that wouldn't change anything. If the plain
+        schedule already says on (e.g. this is just reverting an "off"
+        override to a schedule that's since caught up), this is exactly
+        equivalent to reverting, so it does that instead of layering on a
+        redundant override."""
+        now = self._now()
+        until = self.next_state_change_after(now, "on")
+        if self._would_already_be(now, "on"):
+            await self.clear_override()
+        else:
+            await self._set_override(_GLOBAL_SCOPE, until, "on")
         return until
 
     async def turn_off_now(self) -> datetime:
-        """Force every port off until the schedule's next trigger would act
-        anyway."""
-        until = self.next_trigger_after(self._now())
-        await self._set_override(_GLOBAL_SCOPE, until, "off")
+        """Force every port off until the schedule would actually turn one
+        back on — skipping over any "off" trigger that fires in the
+        meantime, since that wouldn't change anything. Mirrors turn_on_now:
+        if the plain schedule already says off, this just reverts instead
+        of creating a redundant override."""
+        now = self._now()
+        until = self.next_state_change_after(now, "off")
+        if self._would_already_be(now, "off"):
+            await self.clear_override()
+        else:
+            await self._set_override(_GLOBAL_SCOPE, until, "off")
         return until
 
     async def turn_on_port_for(self, mac: str, idx: int, minutes: int) -> datetime:
@@ -303,18 +403,32 @@ class PoeScheduler:
         return until
 
     async def turn_on_port_now(self, mac: str, idx: int) -> datetime:
-        """Force just this port on until its own schedule's next trigger."""
+        """Force just this port on until its own schedule would actually
+        turn it back off — skipping over an "on" trigger that wouldn't
+        change anything. If it would already be on with its own override
+        cleared (schedule, or an inherited global override), this just
+        reverts that override instead of layering on a redundant one."""
         port_cfg = self._find_port(mac, idx)
-        until = self.next_port_trigger_after(port_cfg, self._now())
-        await self._set_override(_port_scope(mac, idx), until, "on")
+        now = self._now()
+        until = self.next_port_state_change_after(port_cfg, now, "on")
+        if self._port_would_already_be(port_cfg, now, "on"):
+            await self.clear_port_override(mac, idx)
+        else:
+            await self._set_override(_port_scope(mac, idx), until, "on")
         return until
 
     async def turn_off_port_now(self, mac: str, idx: int) -> datetime:
-        """Force just this port off until its own schedule's next
-        trigger."""
+        """Force just this port off until its own schedule would actually
+        turn it back on — skipping over an "off" trigger that wouldn't
+        change anything. Mirrors turn_on_port_now: reverts instead of
+        creating a redundant override when the result would be the same."""
         port_cfg = self._find_port(mac, idx)
-        until = self.next_port_trigger_after(port_cfg, self._now())
-        await self._set_override(_port_scope(mac, idx), until, "off")
+        now = self._now()
+        until = self.next_port_state_change_after(port_cfg, now, "off")
+        if self._port_would_already_be(port_cfg, now, "off"):
+            await self.clear_port_override(mac, idx)
+        else:
+            await self._set_override(_port_scope(mac, idx), until, "off")
         return until
 
     async def close(self) -> None:
@@ -328,6 +442,7 @@ class PoeScheduler:
         now = self._now()
         global_active, global_until, global_forced = self.global_override_status()
         ports = []
+        any_on = False
         for port_cfg in self.cfg["ports"]:
             mac, idx = port_cfg["device_mac"], port_cfg["port_idx"]
             port_active, port_until, port_forced = self.port_override_status(mac, idx)
@@ -338,17 +453,34 @@ class PoeScheduler:
             else:
                 effective_until, effective_forced = None, None
             override = (effective_until, effective_forced) if effective_until else None
+            mode = effective_mode(now, override, port_cfg, self.cfg["schedule"])
+            port_on = mode != "off"
+            any_on = any_on or port_on
+            if effective_until is not None:
+                next_change_at, next_change_on = self._port_revert_change(
+                    port_cfg, effective_until, effective_forced
+                )
             ports.append(
                 {
                     "device_mac": mac,
                     "port_idx": idx,
                     "name": self.port_names.get((mac, idx)),
-                    "mode": effective_mode(now, override, port_cfg, self.cfg["schedule"]),
+                    "mode": mode,
                     # this port's OWN override only — distinct from one it
                     # may be inheriting from the global scope
                     "override_active": port_active,
                     "override_until": port_until.isoformat() if port_until else None,
                     "override_mode": port_forced,
+                    # true when this port's own override is the only reason
+                    # it differs from the plain schedule — i.e. clearing it
+                    # (via "Revert to schedule") would have the exact same
+                    # effect as pressing the port's Turn on/off button, so
+                    # the page hides that redundant button and shows just
+                    # the revert link
+                    "override_redundant": (
+                        port_active
+                        and self._port_would_already_be(port_cfg, now, "off" if port_on else "on")
+                    ),
                     # the override actually in effect for this port right
                     # now, whether set on it directly or inherited from the
                     # global scope — this (not the above) is what decides
@@ -363,10 +495,25 @@ class PoeScheduler:
                         effective_until.isoformat() if effective_until else None
                     ),
                     "effective_override_mode": effective_forced,
+                    # when this port will actually next change state, and to
+                    # what — not just when the override job ends, since that
+                    # can land on a moment the schedule agrees with what we
+                    # were already forcing (a no-op), in which case this
+                    # looks past it to the schedule's real next transition
+                    "effective_override_next_change_at": (
+                        next_change_at.isoformat() if effective_until is not None else None
+                    ),
+                    "effective_override_next_change_on": (
+                        next_change_on if effective_until is not None else None
+                    ),
                     # this port's own next trigger, not the global one —
                     # what its "turn on/off now" button would set until
                     "next_trigger": self.next_port_trigger_after(port_cfg, now).isoformat(),
                 }
+            )
+        if global_active:
+            global_next_change_at, global_next_change_on = self._global_revert_change(
+                global_until, global_forced
             )
         return {
             "now": now.isoformat(),
@@ -374,6 +521,19 @@ class PoeScheduler:
             "override_active": global_active,
             "override_until": global_until.isoformat() if global_until else None,
             "override_mode": global_forced,
+            # when any port will actually next change state, and to what —
+            # same idea as a port's own effective_override_next_change_at,
+            # see above
+            "override_next_change_at": (
+                global_next_change_at.isoformat() if global_active else None
+            ),
+            "override_next_change_on": global_next_change_on if global_active else None,
+            # same idea as a port's own override_redundant, see above — true
+            # when the global override is the only reason any_on differs
+            # from the plain schedule
+            "override_redundant": (
+                global_active and self._would_already_be(now, "off" if any_on else "on")
+            ),
             "next_trigger": self.next_trigger_after(now).isoformat(),
             "ports": ports,
         }

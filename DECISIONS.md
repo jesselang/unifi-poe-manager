@@ -170,3 +170,47 @@ shows "manually set until HH:MM" instead, which is always true.
 to what a family member needs to know (is it on or off, and until when).
 Still present in the JSON API (`ports[].mode`) for anyone who wants it;
 just not rendered on the page.
+
+## 2026-09-08 — Supersedes "Don't predict the next state change once an override is active": look past a no-op to the schedule's real next transition
+
+Turned out "manually set until HH:MM" was itself misleading once ports
+could show what happens *at* that time — e.g. force a port off, then
+"on for 1h" while still well within the schedule's normal on-period: the
+override ends mid-day, the schedule already says "on" right then (a
+no-op), and the naive display would read "ON at 15:00" as if something
+were about to happen. `PoeScheduler._port_revert_change()` /
+`_global_revert_change()` now compute the actual next visible change: if
+the schedule already disagrees with the override right at its expiry,
+that's the answer; otherwise they look past it to the schedule's own next
+real transition. Exposed as `effective_override_next_change_at`/`_on`
+(port) and `override_next_change_at`/`_on` (site), which the page now
+shows as `<ON/OFF> at <time>` consistently, override or not.
+
+## 2026-09-08 — "Turn on/off now" reverts instead of layering a redundant override when the schedule already agrees
+
+`turn_on_now`/`turn_off_now`/`turn_on_port_now`/`turn_off_port_now` used
+to always create a new override ending at the schedule's next real
+transition — even when the schedule, with the *existing* override simply
+cleared, would already produce the requested state. That's common: force
+something off against the schedule, wait until the schedule's own on-time
+passes while that override is still running, then press "turn on" — the
+schedule now agrees, so creating a fresh "on" override was functionally
+identical to just reverting, but left a pointless "Revert to schedule"
+link and an extra job around. `_port_would_already_be()` /
+`_would_already_be()` check this first and call `clear_port_override()` /
+`clear_override()` instead whenever clearing alone gets the same result.
+
+## 2026-09-08 — Hide the Turn on/off + duration controls when the active override no longer does anything the schedule wouldn't
+
+Even after the above fix, an override can still exist that's redundant
+with the schedule — e.g. a duration override created earlier, or a port
+that was forced off against the schedule and the schedule has since come
+around to "on" while that override is still running. In that state,
+pressing the Turn on/off button or any 30m/1h/2h duration button produces
+exactly the same result as "Revert to schedule" (see the decision above),
+so offering three different-looking buttons that all do the same thing is
+just confusing. `status()` now exposes `override_redundant` (site) and
+each port's own `override_redundant`, true exactly when that scope's
+active override is the only reason its effective state differs from the
+plain schedule. The page hides the Turn on/off button and duration row in
+that case, leaving "Revert to schedule" as the one visible action.

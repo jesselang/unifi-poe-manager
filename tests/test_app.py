@@ -21,6 +21,9 @@ SAMPLE_STATUS = {
     "override_active": False,
     "override_until": None,
     "override_mode": None,
+    "override_next_change_at": None,
+    "override_next_change_on": None,
+    "override_redundant": False,
     "next_trigger": "2026-09-07T23:59:00+00:00",
     "ports": [
         {
@@ -34,6 +37,9 @@ SAMPLE_STATUS = {
             "effective_override_active": False,
             "effective_override_until": None,
             "effective_override_mode": None,
+            "effective_override_next_change_at": None,
+            "effective_override_next_change_on": None,
+            "override_redundant": False,
             "next_trigger": "2026-09-07T23:59:00+00:00",
         }
     ],
@@ -240,6 +246,9 @@ ALL_OFF_STATUS = {
     "override_active": False,
     "override_until": None,
     "override_mode": None,
+    "override_next_change_at": None,
+    "override_next_change_on": None,
+    "override_redundant": False,
     "next_trigger": "2026-09-07T06:00:00+00:00",
     "ports": [
         {
@@ -253,6 +262,9 @@ ALL_OFF_STATUS = {
             "effective_override_active": False,
             "effective_override_until": None,
             "effective_override_mode": None,
+            "effective_override_next_change_at": None,
+            "effective_override_next_change_on": None,
+            "override_redundant": False,
             "next_trigger": "2026-09-07T06:00:00+00:00",
         }
     ],
@@ -318,6 +330,8 @@ def test_ports_not_expanded_by_global_override_alone():
         "override_active": True,
         "override_until": "2026-09-07T13:00:00+00:00",
         "override_mode": "on",
+        "override_next_change_at": "2026-09-07T13:00:00+00:00",
+        "override_next_change_on": True,
     }
     stub = StubScheduler(status_value=status_with_global_override)
     try:
@@ -491,6 +505,9 @@ OVERRIDDEN_OFF_STATUS = {
     "override_active": False,
     "override_until": None,
     "override_mode": None,
+    "override_next_change_at": None,
+    "override_next_change_on": None,
+    "override_redundant": False,
     "next_trigger": "2026-09-07T23:59:00+00:00",
     "ports": [
         {
@@ -503,25 +520,132 @@ OVERRIDDEN_OFF_STATUS = {
             "effective_override_active": True,
             "effective_override_until": "2026-09-07T14:00:00+00:00",
             "effective_override_mode": "off",
+            "effective_override_next_change_at": "2026-09-07T14:00:00+00:00",
+            "effective_override_next_change_on": False,  # schedule still says off at 14:00
+            "override_redundant": False,
             "next_trigger": "2026-09-07T23:59:00+00:00",
         }
     ],
 }
 
 
-def test_index_shows_manually_set_wording_and_no_next_prediction_when_overridden():
+def test_port_next_state_hidden_when_no_override():
+    # a port without its own override just follows the site schedule
+    # (shown once, at the site level) — repeating "OFF at 23:59" per port
+    # is noise, so the port's next-state line should only appear when the
+    # port has an active override of its own.
+    stub = StubScheduler(status_value=SAMPLE_STATUS)
+    try:
+        resp = client_for(stub).get("/")
+        port_html = resp.text.split('<ul class="ports">')[1]
+        assert "next-state" not in port_html
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_index_shows_revert_action_and_time_when_overridden():
     # Once an override is active, the next cron trigger firing doesn't
     # necessarily flip the state (e.g. turning off near the scheduled off
-    # time lands the override's expiry right on that same transition) — so
-    # the page must not claim a "next ON/OFF at HH:MM" it can't guarantee.
+    # time lands the override's expiry right on that same transition), so
+    # the line shown is what the schedule says will happen when the
+    # override itself lapses (effective_override_next_change_on), not the
+    # next cron trigger.
     stub = StubScheduler(status_value=OVERRIDDEN_OFF_STATUS)
     try:
         resp = client_for(stub).get("/")
         port_html = resp.text.split('<ul class="ports">')[1]
-        assert "manually set until 14:00" in port_html
+        assert "OFF at 14:00" in port_html
+        assert "manually set" not in port_html
         assert "(2h)" in port_html  # now=12:00, override_until=14:00
         assert "next ON" not in port_html
         assert "forced" not in resp.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_index_shows_next_actual_change_not_a_noop_override_expiry():
+    # the override job itself ends at 14:00, but the schedule already
+    # agrees with "on" right then (a no-op) — the page must show the real
+    # next change (23:59, off), not "ON at 14:00".
+    status = {
+        **SAMPLE_STATUS,
+        "ports": [
+            {
+                **SAMPLE_STATUS["ports"][0],
+                "mode": "auto",
+                "override_active": True,
+                "override_until": "2026-09-07T14:00:00+00:00",
+                "override_mode": "on",
+                "effective_override_active": True,
+                "effective_override_until": "2026-09-07T14:00:00+00:00",
+                "effective_override_mode": "on",
+                "effective_override_next_change_at": "2026-09-07T23:59:00+00:00",
+                "effective_override_next_change_on": False,
+            }
+        ],
+    }
+    stub = StubScheduler(status_value=status)
+    try:
+        resp = client_for(stub).get("/")
+        port_html = resp.text.split('<ul class="ports">')[1]
+        assert "OFF at 23:59" in port_html
+        assert "ON at 14:00" not in port_html
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_index_hides_redundant_controls_when_override_matches_schedule():
+    # site override is "on", but the schedule already agrees (see
+    # override_redundant) — the only thing worth doing here is reverting,
+    # so the Turn on/off button and duration row shouldn't be offered
+    # alongside a "Revert to schedule" link that does the exact same thing.
+    status = {
+        **SAMPLE_STATUS,
+        "override_active": True,
+        "override_until": "2026-09-07T13:00:00+00:00",
+        "override_mode": "on",
+        "override_next_change_at": "2026-09-07T13:00:00+00:00",
+        "override_next_change_on": True,
+        "override_redundant": True,
+    }
+    stub = StubScheduler(status_value=status)
+    try:
+        resp = client_for(stub).get("/")
+        site_html = resp.text.split('<details class="ports-toggle"')[0]
+        assert ">Turn off<" not in site_html
+        assert ">Turn on<" not in site_html
+        assert ">30m<" not in site_html
+        assert ">Revert to schedule<" in site_html
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_index_hides_redundant_port_controls_when_override_matches_schedule():
+    status = {
+        **SAMPLE_STATUS,
+        "ports": [
+            {
+                **SAMPLE_STATUS["ports"][0],
+                "mode": "off",
+                "override_active": True,
+                "override_until": "2026-09-07T13:00:00+00:00",
+                "override_mode": "off",
+                "effective_override_active": True,
+                "effective_override_until": "2026-09-07T13:00:00+00:00",
+                "effective_override_mode": "off",
+                "effective_override_next_change_at": "2026-09-07T13:00:00+00:00",
+                "effective_override_next_change_on": False,
+                "override_redundant": True,
+            }
+        ],
+    }
+    stub = StubScheduler(status_value=status)
+    try:
+        resp = client_for(stub).get("/")
+        port_html = resp.text.split('<ul class="ports">')[1]
+        assert ">Turn on<" not in port_html
+        assert ">30m<" not in port_html
+        assert ">Revert to schedule<" in port_html
     finally:
         app.dependency_overrides.clear()
 

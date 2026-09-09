@@ -112,6 +112,11 @@ def test_status_reflects_override_and_ports():
         assert len(status["ports"]) == 1
         port = dict(status["ports"][0])
         next_trigger = port.pop("next_trigger")
+        next_change_at = port.pop("effective_override_next_change_at")
+        next_change_on = port.pop("effective_override_next_change_on")
+        expected_at, expected_on = sched._port_revert_change(cfg["ports"][0], until, "on")
+        assert next_change_at == expected_at.isoformat()
+        assert next_change_on == expected_on
         assert port == {
             "device_mac": MAC,
             "port_idx": 4,
@@ -127,11 +132,181 @@ def test_status_reflects_override_and_ports():
             "effective_override_active": True,
             "effective_override_until": until.isoformat(),
             "effective_override_mode": "on",
+            # never redundant when it's the port's own override that's
+            # inactive — override_redundant only applies to a port's own
+            "override_redundant": False,
         }
         expected_next_trigger = sched.next_port_trigger_after(
             cfg["ports"][0], datetime.now(tz=TZ) - timedelta(seconds=1)
         )
         assert next_trigger == expected_next_trigger.isoformat()
+        sched.scheduler.shutdown()
+
+    asyncio.run(run())
+
+
+def test_effective_override_next_change_reflects_schedule_at_expiry():
+    # turn_off_port_now() sets the override to expire exactly at the port's
+    # next scheduled trigger — here that's the (next day's) 06:00 "on"
+    # time, since it's forced off during today's on-period. The schedule
+    # says the port should be back on the instant the override lapses, so
+    # effective_override_next_change_on must reflect that ("ON at 06:00"),
+    # not just "manually set until 06:00".
+    cfg = cfg_with_ports({"device_mac": MAC, "port_idx": 4, "on_mode": "auto"})
+
+    async def run():
+        now = datetime(2026, 9, 7, 14, 0, tzinfo=TZ)
+        sched = make_poe_scheduler(cfg, now=now)
+        until = await sched.turn_off_port_now(MAC, 4)
+        assert until == datetime(2026, 9, 8, 6, 0, tzinfo=TZ)
+
+        status = sched.status()
+        port = status["ports"][0]
+        assert port["effective_override_mode"] == "off"
+        assert port["effective_override_next_change_at"] == until.isoformat()
+        assert port["effective_override_next_change_on"] is True
+        sched.scheduler.shutdown()
+
+    asyncio.run(run())
+
+
+def test_turn_off_port_now_skips_a_redundant_off_trigger():
+    # off at 22:00, on at 07:30. At 21:50 the plain next trigger is the
+    # 22:00 "off" — a no-op given we're about to force off anyway. The
+    # override should instead run until 07:30, the next trigger that would
+    # actually change something.
+    cfg = cfg_with_ports(
+        {
+            "device_mac": MAC,
+            "port_idx": 4,
+            "on_mode": "auto",
+            "off_hour": 22,
+            "off_minute": 0,
+            "on_hour": 7,
+            "on_minute": 30,
+        }
+    )
+
+    async def run():
+        now = datetime(2026, 9, 7, 21, 50, tzinfo=TZ)
+        sched = make_poe_scheduler(cfg, now=now)
+        until = await sched.turn_off_port_now(MAC, 4)
+        assert until == datetime(2026, 9, 8, 7, 30, tzinfo=TZ)
+
+        status = sched.status()
+        port = status["ports"][0]
+        assert port["effective_override_mode"] == "off"
+        assert port["effective_override_next_change_at"] == until.isoformat()
+        assert port["effective_override_next_change_on"] is True
+        sched.scheduler.shutdown()
+
+    asyncio.run(run())
+
+
+def test_effective_override_next_change_looks_past_a_noop_expiry():
+    # Port is forced off (e.g. via "Turn off"), then the user clicks
+    # "on for 1h" while it's still well within the schedule's normal
+    # on-period (off at 23:59, on at 6:00) — so when that 1h override ends,
+    # the schedule already agrees ("on"), which isn't a real, visible
+    # change. The next-change fields should look past that no-op to the
+    # schedule's actual next transition: the 23:59 off.
+    cfg = cfg_with_ports({"device_mac": MAC, "port_idx": 4, "on_mode": "auto"})
+
+    async def run():
+        now = datetime(2026, 9, 7, 14, 0, tzinfo=TZ)
+        sched = make_poe_scheduler(cfg, now=now)
+        await sched.turn_off_port_now(MAC, 4)
+        until = await sched.turn_on_port_for(MAC, 4, minutes=60)
+        assert until == datetime(2026, 9, 7, 15, 0, tzinfo=TZ)
+
+        status = sched.status()
+        port = status["ports"][0]
+        assert port["effective_override_mode"] == "on"
+        # not "ON at 15:00" (a no-op) — the real next change is the 23:59 off
+        assert port["effective_override_next_change_at"] == datetime(
+            2026, 9, 7, 23, 59, tzinfo=TZ
+        ).isoformat()
+        assert port["effective_override_next_change_on"] is False
+        sched.scheduler.shutdown()
+
+    asyncio.run(run())
+
+
+def test_turn_on_port_now_reverts_instead_of_overriding_when_schedule_already_agrees():
+    # Port was forced off against the schedule, then the schedule's own
+    # on-time (6:00) passes while the override is still running — so the
+    # schedule now agrees with "on" too. Clicking "turn on" at that point
+    # should just clear the (now pointless) override rather than laying a
+    # fresh "on" override on top of it.
+    cfg = cfg_with_ports({"device_mac": MAC, "port_idx": 4, "on_mode": "auto"})
+
+    async def run():
+        now = datetime(2026, 9, 7, 14, 0, tzinfo=TZ)
+        sched = make_poe_scheduler(cfg, now=now)
+        await sched.turn_off_port_now(MAC, 4)  # forced off against schedule
+
+        now = datetime(2026, 9, 8, 6, 30, tzinfo=TZ)  # schedule's own on-time has passed
+        sched.clock = lambda: now
+        await sched.turn_on_port_now(MAC, 4)
+
+        status = sched.status()
+        port = status["ports"][0]
+        assert port["override_active"] is False
+        assert port["mode"] != "off"
+        sched.scheduler.shutdown()
+
+    asyncio.run(run())
+
+
+def test_turn_off_port_now_reverts_instead_of_overriding_when_schedule_already_agrees():
+    # Mirror of the above: port was forced on against the schedule (e.g.
+    # while it's normally off overnight), then the schedule's own off-time
+    # passes while that override is still running. Clicking "turn off"
+    # then should just clear the override, not create a redundant one.
+    cfg = cfg_with_ports({"device_mac": MAC, "port_idx": 4, "on_mode": "auto"})
+
+    async def run():
+        now = datetime(2026, 9, 8, 1, 0, tzinfo=TZ)  # overnight, schedule says off
+        sched = make_poe_scheduler(cfg, now=now)
+        await sched.turn_on_port_now(MAC, 4)  # forced on against schedule
+
+        now = datetime(2026, 9, 8, 6, 30, tzinfo=TZ)  # still on-period per schedule
+        sched.clock = lambda: now
+        assert sched.status()["ports"][0]["override_active"] is True
+
+        now = datetime(2026, 9, 8, 23, 59, tzinfo=TZ)  # schedule's own off-time has passed
+        sched.clock = lambda: now
+        await sched.turn_off_port_now(MAC, 4)
+
+        status = sched.status()
+        port = status["ports"][0]
+        assert port["override_active"] is False
+        assert port["mode"] == "off"
+        sched.scheduler.shutdown()
+
+    asyncio.run(run())
+
+
+def test_turn_off_now_skips_a_redundant_off_trigger_across_ports():
+    # same idea as the per-port version, but for the global "turn all off"
+    # — the earliest actual state change across every configured port.
+    cfg = cfg_with_ports(
+        {
+            "device_mac": MAC,
+            "port_idx": 4,
+            "on_mode": "auto",
+            "off_hour": 22,
+            "off_minute": 0,
+            "on_hour": 7,
+            "on_minute": 30,
+        }
+    )
+
+    async def run():
+        now = datetime(2026, 9, 7, 21, 50, tzinfo=TZ)
+        sched = make_poe_scheduler(cfg, now=now)
+        until = await sched.turn_off_now()
+        assert until == datetime(2026, 9, 8, 7, 30, tzinfo=TZ)
         sched.scheduler.shutdown()
 
     asyncio.run(run())
@@ -333,7 +508,11 @@ def test_turn_on_then_off_cancels_previous_direction():
     cfg = cfg_with_ports({"device_mac": MAC, "port_idx": 4, "on_mode": "auto"})
 
     async def run():
-        sched = make_poe_scheduler(cfg)
+        # pinned mid-afternoon (schedule's own on-period), so "turn off"
+        # below is a real contradiction of the schedule and must create a
+        # genuine override, not collapse into a no-op revert
+        now = datetime(2026, 9, 7, 14, 0, tzinfo=TZ)
+        sched = make_poe_scheduler(cfg, now=now)
         await sched.turn_on_for(minutes=30)
         on_active, _, _ = sched.global_override_status()
         assert on_active
@@ -374,10 +553,17 @@ def test_turn_on_now_overrides_until_next_registered_trigger():
     cfg = cfg_with_ports({"device_mac": MAC, "port_idx": 4, "on_mode": "auto"})
 
     async def run():
-        sched = make_poe_scheduler(cfg)
+        # pinned overnight (schedule's own off-period), so "turn on" below
+        # is a real contradiction of the schedule and must create a
+        # genuine override, not collapse into a no-op revert
+        now = datetime(2026, 9, 7, 1, 0, tzinfo=TZ)
+        sched = make_poe_scheduler(cfg, now=now)
         until = await sched.turn_on_now()
-        expected = sched.next_trigger_after(datetime.now(tz=TZ) - timedelta(seconds=1))
+        expected = sched.next_state_change_after(now, "on")
         assert until == expected
+        active, _, forced = sched.global_override_status()
+        assert active
+        assert forced == "on"
         sched.scheduler.shutdown()
 
     asyncio.run(run())
@@ -500,8 +686,8 @@ def test_turn_on_port_now_uses_that_ports_own_schedule():
         sched = make_poe_scheduler(cfg)
         port_cfg = cfg["ports"][0]
         until = await sched.turn_on_port_now(MAC, 4)
-        expected = sched.next_port_trigger_after(
-            port_cfg, datetime.now(tz=TZ) - timedelta(seconds=1)
+        expected = sched.next_port_state_change_after(
+            port_cfg, datetime.now(tz=TZ) - timedelta(seconds=1), "on"
         )
         assert until == expected
         sched.scheduler.shutdown()
